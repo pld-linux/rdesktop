@@ -10,6 +10,7 @@ Group(pl):	X11/Aplikacje/Sieciowe
 Source0:	http://prdownloads.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-6.bz2
 Patch1:		%{name}-opt.patch
+Patch2:		%{name}-endian.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	gmp-devel
 BuildRequires:	XFree86-devel
@@ -36,6 +37,7 @@ Services jest planowane.
 %setup -q
 %patch0 -p2
 %patch1 -p1
+%patch2 -p1
 
 %build
 %{__make} \
