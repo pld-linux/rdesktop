@@ -13,16 +13,16 @@ BuildRequires:	openssl-devel >= 0.9.7c
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
-rdesktop is an open source client for Windows NT or Windows 2000 Terminal
-Server, capable of natively speaking its Remote Desktop Protocol (RDP) in
-order to present the user's NT desktop. Unlike Citrix ICA, no server
-extensions are required.
+rdesktop is an open source client for Windows NT or Windows 2000
+Terminal Server, capable of natively speaking its Remote Desktop
+Protocol (RDP) in order to present the user's NT desktop. Unlike
+Citrix ICA, no server extensions are required.
 
 %description -l pl
-rdesktop jest klientem natywnie u¿ywaj±cym protoko³u RDP (Remote Desktop
-Protocol) umo¿liwiaj±cego dostêp do Terminal Servera Windows NT lub
-Windows 2000. W przeciwieñstwie do rozwi±zañ typu Citrix nie s± wymagane
-¿adne rozszerzenia po stronie serwera.
+rdesktop jest klientem natywnie u¿ywaj±cym protoko³u RDP (Remote
+Desktop Protocol) umo¿liwiaj±cego dostêp do Terminal Servera Windows
+NT lub Windows 2000. W przeciwieñstwie do rozwi±zañ typu Citrix nie s±
+wymagane ¿adne rozszerzenia po stronie serwera.
 
 %prep
 %setup -q -n %{name}
