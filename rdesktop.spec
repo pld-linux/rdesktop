@@ -20,7 +20,7 @@ BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 rdesktop is an open source client for Windows NT or Windows 2000 Terminal
 Server, capable of natively speaking its Remote Desktop Protocol (RDP) in
 order to present the user's NT desktop. Unlike Citrix ICA, no server
-extensions are required. 
+extensions are required.
 
 %description -l pl
 rdesktop jest klientem natywnie u¿ywaj±cym protoko³u RDP (Remote Desktop
