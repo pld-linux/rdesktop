@@ -15,8 +15,8 @@ BuildRequires:	gmp-devel
 BuildRequires:	XFree86-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
-%define	_prefix		/usr/X11R6
-%define _mandir		%{_prefix}/man
+%define		_prefix		/usr/X11R6
+%define		_mandir		%{_prefix}/man
 
 %description
 rdesktop is an open source client for Windows NT Terminal Server,
