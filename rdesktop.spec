@@ -2,7 +2,7 @@ Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
 Name:		rdesktop
 Version:	1.0.0
-Release:	0.pl19
+Release:	1.pl19
 License:	GPL
 Group:		X11/Applications/Networking
 Group(de):	X11/Applikationen/Netzwerkwesen
@@ -12,8 +12,8 @@ Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-6.bz2
 Patch1:		%{name}-opt.patch
 Patch2:		%{name}-endian.patch
 URL:		http://www.rdesktop.org/
-BuildRequires:	gmp-devel
 BuildRequires:	XFree86-devel
+BuildRequires:	gmp-devel >= 3.1.1
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %define		_prefix		/usr/X11R6
