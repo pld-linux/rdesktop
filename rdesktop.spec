@@ -1,3 +1,4 @@
+# TODO: check/update patches (they provided important functionality!)
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
 Name:		rdesktop
@@ -5,7 +6,7 @@ Version:	1.2.0
 Release:	0.1
 License:	GPL
 Group:		X11/Applications/Networking
-Source0:	ftp://ftp.sourceforge.net/pub/sourceforge/rdesktop/%{name}-%{version}.tar.gz
+Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 #Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-8-5.bz2
 #Patch1:		%{name}-opt+DESTDIR.patch
 #Patch2:		http://bibl4.oru.se/projects/rdesktop/patch19/patches/rdp-srvr-19-6-6.diff
@@ -13,7 +14,6 @@ URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
 BuildRequires:	openssl-devel >= 0.9.7
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
-
 
 %description
 rdesktop is an open source client for Windows NT or Windows 2000 Terminal
@@ -71,6 +71,7 @@ rm -rf $RPM_BUILD_ROOT
 %attr(755,root,root) %{_bindir}/rdesktop
 %{_mandir}/man?/*
 %attr(755,root,root) %{_datadir}/rdesktop
+
 #%files srvr
 #%defattr(644,root,root,755)
 #%doc rdp-srvr-readme.txt
