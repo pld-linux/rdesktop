@@ -1,0 +1,58 @@
+--- rdesktop-1.1.0/Makefile.orig	Fri Jun 14 11:24:24 2002
++++ rdesktop-1.1.0/Makefile	Fri Jun 14 11:37:52 2002
+@@ -7,7 +7,7 @@
+ # Configuration defaults
+ 
+ CC       = gcc
+-CFLAGS   = -O2 -Wall
++CFLAGS   = $(CFLAGSOPT) -Wall
+ INCLUDES = -I$(shell pwd)
+ LDLIBS   =
+ 
+@@ -92,7 +92,7 @@
+ 
+ include Makeconf  # local configuration
+ 
+-all:	localendian.h rdesktop
++all:	localendian.h rdesktop rdp-srvr
+ 
+ localendian.h: endian
+ 	rm -f localendian.h
+@@ -102,29 +102,24 @@
+ 	$(CC) -o tests/endian tests/endian.c
+ 
+ rdesktop: $(RDPOBJ) $(SSL_OBJ) ${GUI_OBJ} ${GNUOBJ}
+-	$(CC) $(CFLAGS) -o rdesktop $(RDPOBJ) $(SSL_OBJ) $(LDDIRS) $(LDLIBS) ${GNUOBJ} ${GUI_OBJ} ${GUI_LIBS} ${SSL_LIBS}
++	$(CC) $(CFLAGS) $(LDFLAGSOPT) -o rdesktop $(RDPOBJ) $(SSL_OBJ) $(LDDIRS) $(LDLIBS) ${GNUOBJ} ${GUI_OBJ} ${GUI_LIBS} ${SSL_LIBS}
+ 
+ rdp-srvr: $(RDPSOBJ) ${SSL_OBJ} ${GUI_OBJ} $(GNUOBJ)
+-	$(CC) $(CFLAGS) -o rdp-srvr $(RDPSOBJ) $(SSL_OBJ) $(LDDIRS) $(LDLIBS) ${GNUOBJ} ${GUI_OBJ} ${GUI_LIBS}  ${SSL_LIBS}
++	$(CC) $(CFLAGS) $(LDFLAGSOPT) -o rdp-srvr $(RDPSOBJ) $(SSL_OBJ) $(LDDIRS) $(LDLIBS) ${GNUOBJ} ${GUI_OBJ} ${GUI_LIBS}  ${SSL_LIBS}
+ 
+ Makeconf:
+ 	./configure
+ 
+-install: installbin
++install: installbin installman
+ 
+ installbin: rdesktop rdp-srvr
+-	mkdir -p $(BINDIR)
+-	cp rdesktop $(BINDIR)
+-	cp rdp-srvr $(BINDIR)
+-	strip $(BINDIR)/rdesktop
+-	strip $(BINDIR)/rdp-srvr
+-	chmod 755 $(BINDIR)/rdesktop
+-	chmod 755 $(BINDIR)/rdp-srvr
++	install -d $(DESTDIR)$(BINDIR)
++	install -m755 rdesktop $(DESTDIR)$(BINDIR)
++	install -m755 rdp-srvr $(DESTDIR)$(BINDIR)
+ 
+ installman: rdesktop.1
+-	mkdir -p $(MANDIR)/man1
+-	cp rdesktop.1 $(MANDIR)/man1
+-	chmod 755 $(MANDIR)/man1/rdesktop.1
++	install -d $(DESTDIR)$(MANDIR)/man1
++	install -m644 rdesktop.1 $(DESTDIR)$(MANDIR)/man1
+ 
+ proto:
+ 	cproto -DMAKE_PROTO -o proto.h *.c
