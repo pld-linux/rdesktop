@@ -1,0 +1,16 @@
+diff -urN rdesktop-1.0.0.org/Makefile rdesktop-1.0.0/Makefile
+--- rdesktop-1.0.0.org/Makefile	Tue May  8 21:40:35 2001
++++ rdesktop-1.0.0/Makefile	Tue May  8 21:41:46 2001
+@@ -20,9 +20,9 @@
+ 
+ CC     = gcc
+ COFLAGS = -funroll-loops -fexpensive-optimizations -ffast-math -fomit-frame-pointer -frerun-cse-after-loop
+-CFLAGS = -O2 $(COFLAGS) -Wall $(DEBUG) $(XINERAMA_CFLAGS) -I$(X11DIR)/include
+-LDFLAGS   = -L$(X11DIR)/lib -lX11 $(XINERAMA_LIBS) -lgmp
+-INSTALL= install -m 755 -s
++CFLAGS = $(CFLAGSOPT) $(COFLAGS) -Wall $(DEBUG) $(XINERAMA_CFLAGS) -I$(X11DIR)/include
++LDFLAGS   = -L$(X11DIR)/lib -lX11 $(XINERAMA_LIBS) -lgmp $(LDFLAGSOPT)
++INSTALL= install -m 755
+ INSTALLMAN= install -m 644 
+ 
+ OS = $(shell uname -s)
