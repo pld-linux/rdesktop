@@ -1,13 +1,12 @@
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
 Name:		rdesktop
-Version:	1.3.1
-Release:	4
+Version:	1.4.0
+Release:	1
 License:	GPL
 Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
-# Source0-md5:	968a1e3f5161bab80c306df31c54cfb1
-Patch0:		%{name}-kde-krdc.patch
+# Source0-md5:	542cb9d9b4dd1ecaf3ed4ff753fea7b8
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
 BuildRequires:	openssl-devel >= 0.9.7d
@@ -27,8 +26,6 @@ wymagane ¿adne rozszerzenia po stronie serwera.
 
 %prep
 %setup -q
-
-%patch -p0
 
 %build
 ./configure \
