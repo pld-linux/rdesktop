@@ -7,6 +7,7 @@ Release:	0.1
 License:	GPL
 Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
+# Source0-md5:	b5e108e83e9de883e965a2bb0c7e7036
 #Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-8-5.bz2
 #Patch1:		%{name}-opt+DESTDIR.patch
 #Patch2:		http://bibl4.oru.se/projects/rdesktop/patch19/patches/rdp-srvr-19-6-6.diff
