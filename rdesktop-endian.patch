@@ -1,15 +1,15 @@
 diff -urN rdesktop-1.0.0.org/rdesktop.h rdesktop-1.0.0/rdesktop.h
 --- rdesktop-1.0.0.org/rdesktop.h	Tue May  8 22:40:12 2001
-+++ rdesktop-1.0.0/rdesktop.h	Tue May  8 22:44:44 2001
++++ rdesktop-1.0.0/rdesktop.h	Wed May  9 11:04:49 2001
 @@ -31,6 +31,7 @@
  
  #include <stdio.h>
  #include <string.h>
-+#include <endian.h>
++#include <endian.g>
  
  #define VERSION "1.0.0-pl19-6"
  
-@@ -38,16 +39,13 @@
+@@ -38,22 +39,19 @@
  /*
   * check endianess
   */
@@ -31,3 +31,10 @@ diff -urN rdesktop-1.0.0.org/rdesktop.h rdesktop-1.0.0/rdesktop.h
  
  /*
   * check if we need to align data
+  */
+ 
+-#if defined(__sparc) || defined(__alpha__) || defined(__hppa) || \
++#if defined(__sparc__) || defined(__alpha__) || defined(__hppa__) || \
+     defined(_AIX)
+ #define NEED_ALIGN
+ #endif
