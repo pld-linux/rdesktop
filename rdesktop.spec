@@ -2,16 +2,16 @@ Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
 Name:		rdesktop
 Version:	1.1.0
-Release:	0.1
+Release:	1
 License:	GPL
 Group:		X11/Applications/Networking
-Source0:	http://prdownloads.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
-Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-8-4.bz2
-#Patch1:		%{name}-opt.patch
-#Patch2:		%{name}-endian.patch
+Source0:	ftp://ftp.sourceforge.net/pub/sourceforge/rdesktop/%{name}-%{version}.tar.gz
+Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-8-5.bz2
+Patch1:		%{name}-opt+DESTDIR.patch
+Patch2:		%{name}-srvr-fix.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
-BuildRequires:	gmp-devel >= 3.1.1
+BuildRequires:	openssl-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %define		_prefix		/usr/X11R6
@@ -31,13 +31,32 @@ NT. W przeciwieñstwie do rozwi±zañ typu Citrix nie s± wymagane ¿adne
 rozszerzenia po stronie serwera. Wsparcie dla Windows 2000 Terminal
 Services jest planowane.
 
+%package srvr
+Summary:	RDP server (for testing purposes)
+Summary(pl):	Serwer RDP (do testów)
+Group:		X11/Applications/Networking
+
+%description srvr
+RDP server for rdesktop testing. It currently connects as viewer to
+VNC server.
+
+%description srvr -l pl
+Serwer RDP do testowania rdesktop. Na razie u¿ywa ³±czy siê jako klient
+z serwerem VNC.
+
 %prep
 %setup -q
 %patch0 -p2
-#%patch1 -p1
-#%patch2 -p1
+%patch1 -p1
+%patch2 -p1
 
 %build
+./configure \
+	--prefix=%{_prefix} \
+	--with-openssl \
+	--with-ssl-includes=/usr/include/openssl \
+	--with-ssl-libs=/usr/lib
+
 %{__make} \
 	CC="%{__cc}" \
 	CFLAGSOPT="%{rpmcflags}" \
@@ -45,18 +64,20 @@ Services jest planowane.
 
 %install
 rm -rf $RPM_BUILD_ROOT
-install -d $RPM_BUILD_ROOT{%{_bindir},%{_mandir}/man1}
 
-install	%{name}		$RPM_BUILD_ROOT%{_bindir}
-install %{name}.1	$RPM_BUILD_ROOT%{_mandir}/man1
-
-gzip -9nf CHANGES readme.txt
+%{__make} install \
+	DESTDIR=$RPM_BUILD_ROOT
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc *.gz
-%attr(755,root,root) %{_bindir}/*
+%doc CHANGES readme.txt
+%attr(755,root,root) %{_bindir}/rdesktop
 %{_mandir}/man?/*
+
+%files srvr
+%defattr(644,root,root,755)
+%doc rdp-srvr-readme.txt
+%attr(755,root,root) %{_bindir}/rdp-srvr
