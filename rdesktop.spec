@@ -1,16 +1,12 @@
-# TODO: check/update patches (they provided important functionality!)
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
 Name:		rdesktop
 Version:	1.3.0
-Release:	0.1
+Release:	2
 License:	GPL
 Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	d8108781d227221a823c34b861486a5d
-#Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-8-5.bz2
-#Patch1:		%{name}-opt+DESTDIR.patch
-#Patch2:		http://bibl4.oru.se/projects/rdesktop/patch19/patches/rdp-srvr-19-6-6.diff
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
 BuildRequires:	openssl-devel >= 0.9.7c
@@ -28,24 +24,8 @@ Protocol) umo¿liwiaj±cego dostêp do Terminal Servera Windows NT lub
 Windows 2000. W przeciwieñstwie do rozwi±zañ typu Citrix nie s± wymagane
 ¿adne rozszerzenia po stronie serwera.
 
-#%package srvr
-#Summary:	RDP server (for testing purposes)
-#Summary(pl):	Serwer RDP (do testów)
-#Group:		X11/Applications/Networking
-
-#%description srvr
-#RDP server for rdesktop testing. It currently connects as viewer to
-#VNC server.
-
-#%description srvr -l pl
-#Serwer RDP do testowania rdesktop. Na razie umo¿liwia ³±czenie siê jako
-#klient z serwerem VNC.
-
 %prep
 %setup -q -n %{name}
-#%patch0 -p2
-#%patch1 -p1
-#%patch2 -p1
 
 %build
 ./configure \
@@ -72,8 +52,3 @@ rm -rf $RPM_BUILD_ROOT
 %attr(755,root,root) %{_bindir}/rdesktop
 %{_mandir}/man?/*
 %attr(755,root,root) %{_datadir}/rdesktop
-
-#%files srvr
-#%defattr(644,root,root,755)
-#%doc rdp-srvr-readme.txt
-#attr(755,root,root) %{_bindir}/rdp-srvr
