@@ -1,0 +1,65 @@
+--- rdesktop-1.1.0/Makefile.orig	Fri Jun 14 11:46:27 2002
++++ rdesktop-1.1.0/Makefile	Fri Jun 14 11:48:46 2002
+@@ -104,8 +104,8 @@
+ rdesktop: $(RDPOBJ) $(SSL_OBJ) ${GUI_OBJ} ${GNUOBJ}
+ 	$(CC) $(CFLAGS) $(LDFLAGSOPT) -o rdesktop $(RDPOBJ) $(SSL_OBJ) $(LDDIRS) $(LDLIBS) ${GNUOBJ} ${GUI_OBJ} ${GUI_LIBS} ${SSL_LIBS}
+ 
+-rdp-srvr: $(RDPSOBJ) ${SSL_OBJ} ${GUI_OBJ} $(GNUOBJ)
+-	$(CC) $(CFLAGS) $(LDFLAGSOPT) -o rdp-srvr $(RDPSOBJ) $(SSL_OBJ) $(LDDIRS) $(LDLIBS) ${GNUOBJ} ${GUI_OBJ} ${GUI_LIBS}  ${SSL_LIBS}
++rdp-srvr: $(RDPSOBJ) ${SSL_OBJ} $(GNUOBJ)
++	$(CC) $(CFLAGS) $(LDFLAGSOPT) -o rdp-srvr $(RDPSOBJ) $(SSL_OBJ) $(LDDIRS) $(LDLIBS) ${GNUOBJ} ${GUI_LIBS}  ${SSL_LIBS}
+ 
+ Makeconf:
+ 	./configure
+@@ -130,25 +130,25 @@
+ 	rm -f gl/*.o
+ 
+ rdp-srvr.o: rdesktop.c
+-	$(CC) $(CFLAGS) -DSERVER -o $@ -c $<
++	$(CC) $(CFLAGS) $(SSL_INCLUDES) $(INCLUDES) -DSERVER -o $@ -c $<
+ 
+ iso-s.o: iso.c
+-	$(CC) $(CFLAGS) -DSERVER -o $@ -c $<
++	$(CC) $(CFLAGS) $(SSL_INCLUDES) $(INCLUDES) -DSERVER -o $@ -c $<
+ 
+ mcs-s.o: mcs.c
+-	$(CC) $(CFLAGS) -DSERVER -o $@ -c $<
++	$(CC) $(CFLAGS) $(SSL_INCLUDES) $(INCLUDES) -DSERVER -o $@ -c $<
+ 
+ rdp-s.o: rdp.c
+-	$(CC) $(CFLAGS) -DSERVER -o $@ -c $<
++	$(CC) $(CFLAGS) $(SSL_INCLUDES) $(INCLUDES) -DSERVER -o $@ -c $<
+ 
+ secure-s.o: secure.c
+-	$(CC) $(CFLAGS) -DSERVER -o $@ -c $<
++	$(CC) $(CFLAGS) $(SSL_INCLUDES) $(INCLUDES) -DSERVER -o $@ -c $<
+ 
+ tcp-s.o: tcp.c
+-	$(CC) $(CFLAGS) -DSERVER -o $@ -c $<
++	$(CC) $(CFLAGS) $(SSL_INCLUDES) $(INCLUDES) -DSERVER -o $@ -c $<
+ 
+-xwin-s.o: xwin.c keymap_wrap.c keymap.c
+-	$(CC) $(CFLAGS) -DSERVER -o $@ -c $<
++xwin-s.o: gl/xwin.c keymap_wrap.c keymap.h
++	$(CC) $(CFLAGS) $(SSL_INCLUDES) $(INCLUDES) -DSERVER -o $@ -c $<
+ 
+ .SUFFIXES:
+ .SUFFIXES: .c .o
+--- rdesktop-1.1.0/gl/xwin.c.orig	Fri Jun 14 11:56:33 2002
++++ rdesktop-1.1.0/gl/xwin.c	Fri Jun 14 11:59:53 2002
+@@ -33,6 +33,7 @@
+ #include <sys/time.h>
+ #include <rdesktop.h>
+ #include <stdlib.h>
++#include <time.h>
+ 
+ #include <keymap_wrap.c>
+ 
+@@ -1803,6 +1804,7 @@
+ 
+ #include <X11/keysym.h>
+ 
++unsigned int
+ x_key_to_sym(key, down)
+ int key;
+ int down;
