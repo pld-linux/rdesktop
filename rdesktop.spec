@@ -11,7 +11,7 @@ Patch1:		%{name}-opt+DESTDIR.patch
 Patch2:		%{name}-srvr-fix.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
-BuildRequires:	openssl-devel
+BuildRequires:	openssl-devel >= 0.9.7
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 
