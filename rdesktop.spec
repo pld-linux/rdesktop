@@ -9,8 +9,11 @@ Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	968a1e3f5161bab80c306df31c54cfb1
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
-BuildRequires:	openssl-devel >= 0.9.7c
+BuildRequires:	openssl-devel >= 0.9.6k
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
+
+%define		_prefix		/usr/X11R6
+%define		_mandir		%{_prefix}/man
 
 %description
 rdesktop is an open source client for Windows NT or Windows 2000
