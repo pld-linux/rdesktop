@@ -32,10 +32,13 @@ wymagane ¿adne rozszerzenia po stronie serwera.
 	--mandir=%{_mandir} \
 	--prefix=%{_prefix}
 
+cat >>Makeconf <<EOF
+CFLAGS+=%{rpmcflags}
+LDFLAGS+=%{rpmldflags} -L%{_prefix}/X11R6/%{_lib}
+EOF
+
 %{__make} \
-	CC="%{__cc}" \
-	CFLAGSOPT="%{rpmcflags}" \
-	LDFLAGSOPT="%{rpmldflags}"
+	CC="%{__cc}"
 
 %install
 rm -rf $RPM_BUILD_ROOT
