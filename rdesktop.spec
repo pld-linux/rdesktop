@@ -34,7 +34,7 @@ wymagane ¿adne rozszerzenia po stronie serwera.
 
 cat >>Makeconf <<EOF
 CFLAGS+=%{rpmcflags}
-LDFLAGS+=%{rpmldflags} -L%{_prefix}/X11R6/%{_lib}
+LDFLAGS+=%{rpmldflags} -L/usr/X11R6/%{_lib}
 EOF
 
 %{__make} \
@@ -53,5 +53,5 @@ rm -rf $RPM_BUILD_ROOT
 %defattr(644,root,root,755)
 %doc doc/
 %attr(755,root,root) %{_bindir}/rdesktop
-%{_mandir}/man?/*
 %attr(755,root,root) %{_datadir}/rdesktop
+%{_mandir}/man?/*
