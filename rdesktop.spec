@@ -9,7 +9,7 @@ Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	968a1e3f5161bab80c306df31c54cfb1
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
-BuildRequires:	openssl-devel >= 0.9.7c
+BuildRequires:	openssl-devel >= 0.9.7d
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
