@@ -13,7 +13,7 @@ Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 #Patch2:		http://bibl4.oru.se/projects/rdesktop/patch19/patches/rdp-srvr-19-6-6.diff
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
-BuildRequires:	openssl-devel >= 0.9.7
+BuildRequires:	openssl-devel >= 0.9.7c
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
