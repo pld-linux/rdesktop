@@ -14,8 +14,6 @@ BuildRequires:	XFree86-devel
 BuildRequires:	openssl-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
-%define		_prefix		/usr/X11R6
-%define		_mandir		%{_prefix}/man
 
 %description
 rdesktop is an open source client for Windows NT or Windows 2000 Terminal
