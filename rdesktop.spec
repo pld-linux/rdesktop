@@ -2,12 +2,12 @@
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
 Name:		rdesktop
-Version:	1.2.0
+Version:	1.3.0
 Release:	0.1
 License:	GPL
 Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
-# Source0-md5:	b5e108e83e9de883e965a2bb0c7e7036
+# Source0-md5:	d8108781d227221a823c34b861486a5d
 #Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-8-5.bz2
 #Patch1:		%{name}-opt+DESTDIR.patch
 #Patch2:		http://bibl4.oru.se/projects/rdesktop/patch19/patches/rdp-srvr-19-6-6.diff
@@ -42,7 +42,7 @@ Windows 2000. W przeciwieñstwie do rozwi±zañ typu Citrix nie s± wymagane
 #klient z serwerem VNC.
 
 %prep
-%setup -q
+%setup -q -n %{name}
 #%patch0 -p2
 #%patch1 -p1
 #%patch2 -p1
@@ -68,7 +68,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc README doc/
+%doc doc/
 %attr(755,root,root) %{_bindir}/rdesktop
 %{_mandir}/man?/*
 %attr(755,root,root) %{_datadir}/rdesktop
