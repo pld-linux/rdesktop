@@ -41,6 +41,7 @@ Services jest planowane.
 
 %build
 %{__make} \
+	CC="%{__cc}" \
 	CFLAGSOPT="%{rpmcflags}" \
 	LDFLAGSOPT="%{rpmldflags}"
 
