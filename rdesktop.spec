@@ -5,8 +5,6 @@ Version:	1.0.0
 Release:	1.pl19
 License:	GPL
 Group:		X11/Applications/Networking
-Group(de):	X11/Applikationen/Netzwerkwesen
-Group(pl):	X11/Aplikacje/Sieciowe
 Source0:	http://prdownloads.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 Patch0:		http://bibl4.oru.se/projects/rdesktop/%{name}-unified-patch19-6.bz2
 Patch1:		%{name}-opt.patch
