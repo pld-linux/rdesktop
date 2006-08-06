@@ -8,7 +8,7 @@ Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	78dd2bae04edf1cb9f65c29930dcc993
 URL:		http://www.rdesktop.org/
-BuildRequires:	XFree86-devel
+BuildRequires:	xorg-lib-libX11-devel
 BuildRequires:	openssl-devel >= 0.9.7d
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
