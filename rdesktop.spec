@@ -1,15 +1,20 @@
+%bcond_with	vnc
+#
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
 Name:		rdesktop
-Version:	1.4.1
-Release:	3
+Version:	1.5.0
+Release:	1
 License:	GPL
 Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
-# Source0-md5:	78dd2bae04edf1cb9f65c29930dcc993
+# Source0-md5:	433546f60fc0f201e99307ba188369ed
+Patch0:		%{name}-vnc.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	openssl-devel >= 0.9.7d
 BuildRequires:	xorg-lib-libX11-devel
+BuildRequires:	libao-devel
+%{?with_vnc:BuildRequires:	libvncserver-devel}
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
@@ -26,19 +31,16 @@ wymagane ¿adne rozszerzenia po stronie serwera.
 
 %prep
 %setup -q
+%patch0 -p1
 
 %build
-./configure \
-	--mandir=%{_mandir} \
-	--prefix=%{_prefix}
+%configure \
+	%{?with_vnc:--with-libvncserver} \
+	--with-libao \
+	--with-sound=libao \
+	--with-ipv6
 
-cat >>Makeconf <<EOF
-CFLAGS+=%{rpmcflags}
-LDFLAGS+=%{rpmldflags} -L/usr/X11R6/%{_lib}
-EOF
-
-%{__make} \
-	CC="%{__cc}"
+%{__make}
 
 %install
 rm -rf $RPM_BUILD_ROOT
