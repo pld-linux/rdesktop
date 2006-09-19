@@ -1,0 +1,2898 @@
+diff -urN rdesktop-1.5.0.org/vnc/vnc.c rdesktop-1.5.0/vnc/vnc.c
+--- rdesktop-1.5.0.org/vnc/vnc.c	1970-01-01 01:00:00.000000000 +0100
++++ rdesktop-1.5.0/vnc/vnc.c	2004-10-07 15:00:29.000000000 +0200
+@@ -0,0 +1,1376 @@
++/*
++   rdesktop: A Remote Desktop Protocol client.
++   User interface services - VNC target
++   Copyright (C) Matthew Chapman 1999-2000
++   Copyright (C) 2000 Tim Edmonds
++   Copyright (C) 2001 James "Wez" Weatherall
++   Copyright (C) 2001 Johannes E. Schindelin
++   
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++   
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++   
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++*/
++
++
++#include <stdio.h>
++#include <time.h>
++
++#ifdef WIN32
++#define close closesocket
++#define strcasecmp _strcmpi
++#else
++#include <unistd.h>
++#include <sys/time.h>		/* timeval */
++#include <sys/socket.h>
++#endif
++
++#include "../rdesktop.h"
++#undef VERSION
++
++#ifdef WIN32
++#define HBITMAP R_HBITMAP
++#define HCURSOR R_HCURSOR
++#define WORD R_WORD
++#endif
++#include "vnc.h"
++#ifdef WIN32
++#undef HBITMAP
++#undef HCURSOR
++#undef WORD
++#endif
++
++#include <errno.h>
++#include <sys/socket.h>
++extern int ListenOnTCPPort(int port);
++extern int rfbClientSocket;
++
++#include <rfb/rfbregion.h>
++
++#define BITSPERBYTES 8
++#define TOBYTES(bits) ((bits)/BITSPERBYTES)
++
++extern int g_width;
++extern int g_height;
++extern int keylayout;
++extern BOOL sendmotion;
++#ifdef ENABLE_SHADOW
++extern int client_counter;
++#endif
++
++
++int rfb_port = 5923;
++int defer_time = 5;
++int rfbClientSocket = 0;
++static rfbScreenInfoPtr server = NULL;
++static vncBuffer *frameBuffer = NULL;
++static uint8_t reverseByte[0x100];
++BOOL g_enable_compose = False;
++int g_display = 0;
++
++/* ignored */
++BOOL owncolmap = False;
++BOOL enable_compose = False;
++
++void
++vncHideCursor()
++{
++	if (server->clientHead)
++		rfbUndrawCursor(server);
++}
++
++/* -=- mouseLookup
++ * Table converting mouse button number (0-2) to flag
++ */
++
++int mouseLookup[3] = {
++	MOUSE_FLAG_BUTTON1, MOUSE_FLAG_BUTTON3, MOUSE_FLAG_BUTTON2
++};
++
++int clipX, clipY, clipW, clipH;
++
++BOOL
++vncwinClipRect(int *x, int *y, int *cx, int *cy)
++{
++	if (*x + *cx > clipX + clipW)
++		*cx = clipX + clipW - *x;
++	if (*y + *cy > clipY + clipH)
++		*cy = clipY + clipH - *y;
++	if (*x < clipX)
++	{
++		*cx -= clipX - *x;
++		*x = clipX;
++	}
++	if (*y < clipY)
++	{
++		*cy -= clipY - *y;
++		*y = clipY;
++	}
++	if (*cx < 0 || *cy < 0)
++		*cx = *cy = 0;
++	return (*cx > 0 && *cy > 0 && *x < server->width && *y < server->height);
++}
++
++void
++xwin_toggle_fullscreen(void)
++{
++}
++
++static int lastbuttons = 0;
++
++#define FIRST_MODIFIER XK_Shift_L
++#define LAST_MODIFIER XK_Hyper_R
++
++static BOOL keystate[LAST_MODIFIER - FIRST_MODIFIER];
++
++void
++init_keyboard()
++{
++	int i;
++	for (i = 0; i < LAST_MODIFIER - FIRST_MODIFIER; i++)
++		keystate[i] = 0;
++
++	xkeymap_init();
++}
++
++BOOL
++get_key_state(unsigned int state, uint32 keysym)
++{
++	if (keysym >= FIRST_MODIFIER && keysym <= LAST_MODIFIER)
++		return keystate[keysym - FIRST_MODIFIER];
++	return 0;
++}
++
++void
++vncKey(rfbBool down, rfbKeySym keysym, struct _rfbClientRec *cl)
++{
++	uint32 ev_time = time(NULL);
++	key_translation tr = { 0, 0 };
++
++	if (keysym >= FIRST_MODIFIER && keysym <= LAST_MODIFIER)
++	{
++		/* TODO: fake local state */
++		keystate[keysym - FIRST_MODIFIER] = down;
++	}
++
++	if (down)
++	{
++		/* TODO: fake local state */
++		if (handle_special_keys(keysym, 0, ev_time, True))
++			return;
++
++		/* TODO: fake local state */
++		tr = xkeymap_translate_key(keysym, 0, 0);
++
++		if (tr.scancode == 0)
++			return;
++
++		ensure_remote_modifiers(ev_time, tr);
++
++		rdp_send_scancode(ev_time, RDP_KEYPRESS, tr.scancode);
++	}
++	else
++	{
++		/* todO: fake local state */
++		if (handle_special_keys(keysym, 0, ev_time, False))
++			return;
++
++		/* todO: fake local state */
++		tr = xkeymap_translate_key(keysym, 0, 0);
++
++		if (tr.scancode == 0)
++			return;
++
++		rdp_send_scancode(ev_time, RDP_KEYRELEASE, tr.scancode);
++	}
++}
++
++void
++vncMouse(int buttonMask, int x, int y, struct _rfbClientRec *cl)
++{
++	int b;
++	uint32 ev_time = time(NULL);
++
++	rdp_send_input(ev_time, RDP_INPUT_MOUSE, MOUSE_FLAG_MOVE, x, y);
++
++	for (b = 0; b < 3; b++)
++	{
++		int bb = 1 << (b);
++		if (!(lastbuttons & bb) && (buttonMask & bb))
++		{
++			rdp_send_input(ev_time, RDP_INPUT_MOUSE,
++				       (mouseLookup[b]) | MOUSE_FLAG_DOWN, x, y);
++		}
++		else if ((lastbuttons & bb) && !(buttonMask & bb))
++		{
++			rdp_send_input(ev_time, RDP_INPUT_MOUSE, (mouseLookup[b]), x, y);
++		}
++	}
++	lastbuttons = buttonMask;
++
++	/* handle cursor */
++	rfbDefaultPtrAddEvent(buttonMask, x, y, cl);
++}
++
++
++void
++rdp2vnc_connect(char *server, uint32 flags, char *domain, char *password,
++		char *shell, char *directory)
++{
++	struct sockaddr addr;
++	fd_set fdset;
++	struct timeval tv;
++	int rfbListenSock, addrlen = sizeof(addr);
++
++	rfbListenSock = rfbListenOnTCPPort(rfb_port);
++	fprintf(stderr, "Listening on VNC port %d\n", rfb_port);
++	if (rfbListenSock <= 0)
++		error("Cannot listen on port %d", rfb_port);
++	else
++		while (1)
++		{
++			FD_ZERO(&fdset);
++			FD_SET(rfbListenSock, &fdset);
++			tv.tv_sec = 5;
++			tv.tv_usec = 0;
++			if (select(rfbListenSock + 1, &fdset, NULL, NULL, &tv) > 0)
++			{
++				rfbClientSocket = accept(rfbListenSock, &addr, &addrlen);
++				if (rfbClientSocket < 0)
++				{
++					error("Error accepting client (%d: %s.\n",
++					      errno, strerror(errno));
++					continue;
++				}
++				ui_create_window();
++				if (!rdp_connect(server, flags, domain, password, shell, directory))
++				{
++					error("Error connecting to RDP server.\n");
++					continue;
++				}
++				if (!fork())
++				{
++					BOOL deactivated;
++					uint32_t ext_disc_reason;
++					printf("Connection successful.\n");
++					rdp_main_loop(&deactivated, &ext_disc_reason);
++					printf("Disconnecting...\n");
++					rdp_disconnect();
++					ui_destroy_window();
++					exit(0);
++				}
++			}
++		}
++}
++
++
++
++
++
++extern char g_title[];
++BOOL
++ui_create_window()
++{
++	int i;
++
++	for (i = 0; i < 0x100; i++)
++		reverseByte[i] =
++			(((i >> 7) & 1)) | (((i >> 6) & 1) << 1) | (((i >> 5) & 1) << 2) |
++			(((i >> 4) & 1) << 3) | (((i >> 3) & 1) << 4) | (((i >> 2) & 1) << 5) |
++			(((i >> 1) & 1) << 6) | (((i >> 0) & 1) << 7);
++
++	server = rfbGetScreen(0, NULL, g_width, g_height, 8, 1, 1);
++	server->desktopName = g_title;
++	server->frameBuffer = (char *) malloc(g_width * g_height);
++	server->ptrAddEvent = vncMouse;
++	server->kbdAddEvent = vncKey;
++#ifdef ENABLE_SHADOW
++	server->httpPort = 6124 + client_counter;
++	server->port = 5924 + client_counter;
++	rfbInitSockets(server);
++	server->alwaysShared = TRUE;
++	server->neverShared = FALSE;
++#else
++	server->port = -1;
++	server->alwaysShared = FALSE;
++	server->neverShared = FALSE;
++#endif
++	server->inetdSock = rfbClientSocket;
++	server->serverFormat.trueColour = FALSE;	/* activate colour maps */
++	server->deferUpdateTime = defer_time;
++
++	frameBuffer = (vncBuffer *) malloc(sizeof(vncBuffer));
++	frameBuffer->w = g_width;
++	frameBuffer->h = g_height;
++	frameBuffer->linew = g_width;
++	frameBuffer->data = server->frameBuffer;
++	frameBuffer->owner = FALSE;
++	frameBuffer->format = &server->serverFormat;
++
++	ui_set_clip(0, 0, g_width, g_height);
++
++	rfbInitServer(server);
++#ifndef ENABLE_SHADOW
++	server->port = rfb_port;
++#else
++	fprintf(stderr, "server listening on port %d (socket %d)\n", server->port,
++		server->listenSock);
++#endif
++
++	init_keyboard();
++
++	return (server != NULL);
++}
++
++void
++ui_destroy_window()
++{
++	rfbCloseClient(server->clientHead);
++}
++
++
++int
++ui_select(int rdpSocket)
++{
++	fd_set fds;
++	struct timeval tv;
++	int n, m = server->maxFd;
++
++	if (rdpSocket > m)
++		m = rdpSocket;
++	while (1)
++	{
++		fds = server->allFds;
++		FD_SET(rdpSocket, &fds);
++		tv.tv_sec = defer_time / 1000;
++		tv.tv_usec = (defer_time % 1000) * 1000;
++		n = select(m + 1, &fds, NULL, NULL, &tv);
++		rfbProcessEvents(server, 0);
++		/* if client is gone, close connection */
++		if (!server->clientHead)
++			close(rdpSocket);
++		if (FD_ISSET(rdpSocket, &fds))
++			return 1;
++	}
++	return 0;
++}
++
++void
++ui_move_pointer(int x, int y)
++{
++	// TODO: Is there a way to send x,y even if cursor encoding is active?
++	rfbUndrawCursor(server);
++	server->cursorX = x;
++	server->cursorY = y;
++}
++
++HBITMAP
++ui_create_bitmap(int width, int height, uint8 * data)
++{
++	vncBuffer *buf;
++
++	buf = vncNewBuffer(width, height, 8);
++	memcpy(buf->data, data, width * height);
++
++	return (HBITMAP) buf;
++}
++
++void
++ui_paint_bitmap(int x, int y, int cx, int cy, int width, int height, uint8 * data)
++{
++	vncBuffer *buf;
++	buf = ui_create_bitmap(width, height, data);
++	vncCopyBlitFrom(server, x, y, cx, cy, buf, 0, 0);
++	vncDeleteBuffer(buf);
++}
++
++void
++ui_destroy_bitmap(HBITMAP bmp)
++{
++	vncDeleteBuffer((vncBuffer *) bmp);
++}
++
++uint8_t
++vncLookupColour(rfbColourMap * colourMap, uint8_t * p)
++{
++	uint8_t i, i1 = 0;
++	uint8_t *cm = colourMap->data.bytes;
++	uint32_t m, m1 = abs(cm[0] - p[0]) + abs(cm[1] - p[1]) + abs(cm[2] - p[2]);
++	for (i = 1; i < 255; i++)
++	{
++		m = abs(cm[i * 3] - p[0]) + abs(cm[i * 3 + 1] - p[1]) + abs(cm[i * 3 + 2] - p[2]);
++		if (m < m1)
++		{
++			m1 = m;
++			i1 = i;
++		}
++	}
++	return (i1);
++}
++
++HCURSOR
++ui_create_cursor(unsigned int x, unsigned int y, int width, int height, uint8 * mask, uint8 * data)
++{
++	int i, j;
++	uint8_t *d0, *d1;
++	uint8_t *cdata;
++	uint8_t white[3] = { 0xff, 0xff, 0xff };
++	uint8_t black[3] = { 0, 0, 0 };
++	uint8_t *cur;
++	rfbCursorPtr cursor;
++	rfbColourMap *colourMap = &server->colourMap;
++
++	cdata = xmalloc(sizeof(uint8_t) * width * height);
++	d0 = xmalloc(sizeof(uint32_t) * width * height / 4);
++	d1 = (uint8_t *) mask;
++	for (j = 0; j < height; j++)
++		for (i = 0; i < width / 8; i++)
++		{
++			d0[j * width / 8 + i] = d1[(height - 1 - j) * width / 8 + i] ^ 0xffffffff;
++		}
++	for (j = 0; j < height; j++)
++	{
++		for (i = 0; i < width; i++)
++		{
++			//strange that the pointer is in 24bit depth when everything
++			//else is in 8bit palletized.
++			cur = data + ((height - 1 - j) * width + i) * 3;
++			if (cur[0] > 0x80 || cur[1] > 0x80 || cur[2] > 0x80)
++			{
++				if (!(d0[(j * width + i) / 8] & (0x80 >> (i & 7))))
++				{
++					/* text cursor! */
++					cdata[j * width + i] = vncLookupColour(colourMap, black);
++					d0[(j * width + i) / 8] |= 0x80 >> (i & 7);
++				}
++				else
++					cdata[j * width + i] = vncLookupColour(colourMap, white);
++			}
++			else
++				cdata[j * width + i] = vncLookupColour(colourMap, cur);
++		}
++	}
++	cursor = (rfbCursorPtr) xmalloc(sizeof(rfbCursor));
++	cursor->width = width;
++	cursor->height = height;
++	cursor->xhot = x;
++	cursor->yhot = y;
++	cursor->mask = (char *) d0;
++	cursor->source = 0;
++	cursor->richSource = cdata;
++	cursor->cleanup = 0;	// workaround: this produces a memleak
++
++	cursor->backRed = cursor->backGreen = cursor->backBlue = 0xffff;
++	cursor->foreRed = cursor->foreGreen = cursor->foreBlue = 0;
++
++	return (HCURSOR) cursor;
++}
++
++void
++ui_set_cursor(HCURSOR cursor)
++{
++	/* FALSE means: don't delete old cursor */
++	rfbSetCursor(server, (rfbCursorPtr) cursor, FALSE);
++}
++
++void
++ui_destroy_cursor(HCURSOR cursor)
++{
++	if (cursor)
++		rfbFreeCursor((rfbCursorPtr) cursor);
++}
++
++void
++ui_set_null_cursor(void)
++{
++	rfbSetCursor(server, 0, FALSE);
++}
++
++HGLYPH
++ui_create_glyph(int width, int height, uint8 * data)
++{
++	int x, y;
++	vncBuffer *buf;
++
++	buf = vncNewBuffer(width, height, 8);
++
++	//data is padded to multiple of 16bit line lengths 
++	for (y = 0; y < height; y++)
++	{
++		for (x = 0; x < width; x++)
++		{
++			int byte = x / 8 + (y * ((width + 7) / 8));
++			byte = rfbEndianTest ? reverseByte[data[byte]] : data[byte];
++			byte = (byte >> (x & 7)) & 0x01;
++			vncSetPixel(buf, x, y, byte ? 0x7f : 0x00);
++		}
++	}
++
++	return (HGLYPH) buf;
++}
++
++void
++ui_destroy_glyph(HGLYPH glyph)
++{
++	ui_destroy_bitmap((HBITMAP) glyph);
++}
++
++HCOLOURMAP
++ui_create_colourmap(COLOURMAP * colours)
++{
++	int i;
++	rfbColourMap *map = vncNewColourMap(server, colours->ncolours);
++	for (i = 0; i < colours->ncolours; i++)
++	{
++		vncSetColourMapEntry(map, i, colours->colours[i].red,
++				     colours->colours[i].green, colours->colours[i].blue);
++	}
++	return map;
++}
++
++void
++ui_destroy_colourmap(HCOLOURMAP map)
++{
++	vncDeleteColourMap(map);
++}
++
++void
++ui_set_colourmap(HCOLOURMAP map)
++{
++	vncSetColourMap(server, map);
++}
++
++void
++ui_set_clip(int x, int y, int cx, int cy)
++{
++	clipX = x;
++	clipY = y;
++	clipW = cx;
++	clipH = cy;
++}
++
++void
++ui_reset_clip()
++{
++	clipX = 0;
++	clipY = 0;
++	clipW = 64000;
++	clipH = 64000;
++}
++
++void
++ui_bell()
++{
++	rfbSendBell(server);
++}
++
++void
++ui_destblt(uint8 opcode,
++	   /* dest */ int x, int y, int cx, int cy)
++{
++	int i;
++	vncBuffer *buf;
++
++	switch (opcode)
++	{
++		case 0:
++		case 15:
++			ui_rect(x, y, cx, cy, 0xff);
++			break;
++		case 5:	// invert
++			buf = vncGetRect(server, x, y, cx, cy);
++			for (i = 0; i < cx * cy; i++)
++				((char *) (buf->data))[i] = !((char *) (buf->data))[i];
++			break;
++		default:
++			unimpl("ui_destblt: opcode=%d %d,%d %dx%d\n", opcode, x, y, cx, cy);
++	}
++}
++
++void
++ui_patblt(uint8 opcode,
++	  /* dest */ int x, int y, int cx, int cy,
++	  /* brush */ BRUSH * brush, int bgcolour, int fgcolour)
++{
++	switch (brush->style)
++	{
++		case 0:	/* Solid */
++			switch (opcode)
++			{
++				case ROP2_XOR:
++					{
++						int xx, yy;
++						vncBuffer *fill = vncNewBuffer(cx, cy, 8);
++						for (yy = 0; yy < cy; yy++)
++							for (xx = 0; xx < cx; xx++)
++								vncSetPixel(fill, xx, yy, fgcolour);
++						if (vncwinClipRect(&x, &y, &cx, &cy))
++							vncXorBlitFrom(server, x, y, cx, cy, fill,
++								       0, 0);
++						break;
++					}
++
++				default:
++					if (vncwinClipRect(&x, &y, &cx, &cy))
++						vncSetRect(server, x, y, cx, cy, fgcolour);
++			}
++			break;
++
++		case 3:	/* Pattern */
++			{
++				int xx, yy;
++				vncBuffer *fill;
++				fill = (vncBuffer *) ui_create_glyph(8, 8, brush->pattern);
++
++				for (yy = 0; yy < 8; yy++)
++				{
++					for (xx = 0; xx < 8; xx++)
++					{
++						vncSetPixel(fill, xx, yy,
++							    vncGetPixel(fill, xx,
++									yy) ? fgcolour : bgcolour);
++					}
++				}
++
++				if (vncwinClipRect(&x, &y, &cx, &cy))
++				{
++					switch (opcode)
++					{
++						case ROP2_COPY:
++							vncCopyBlitFrom(server, x, y, cx, cy, fill,
++									0, 0);
++							break;
++						case ROP2_XOR:
++							vncXorBlitFrom(server, x, y, cx, cy, fill,
++								       0, 0);
++							break;
++						default:
++							unimpl("pattern blit (%d,%d) opcode=%d bg=%d fg=%d\n", x, y, opcode, bgcolour, fgcolour);
++							vncCopyBlitFrom(server, x, y, cx, cy, fill,
++									0, 0);
++							break;
++					}
++				}
++
++				ui_destroy_glyph((HGLYPH) fill);
++				break;
++
++			}
++		default:
++			unimpl("brush %d\n", brush->style);
++	}
++}
++
++void
++ui_screenblt(uint8 opcode,
++	     /* dest */ int x, int y, int cx, int cy,
++	     /* src */ int srcx, int srcy)
++{
++	int ox, oy;
++
++	ox = x;
++	oy = y;
++	if (vncwinClipRect(&x, &y, &cx, &cy))
++	{
++		//if we clipped top or left, we have to adjust srcx,srcy;
++		srcx += x - ox;
++		srcy += y - oy;
++		vncCopyBlit(server, x, y, cx, cy, srcx, srcy);
++	}
++}
++
++void
++ui_memblt(uint8 opcode,
++	  /* dest */ int x, int y, int cx, int cy,
++	  /* src */ HBITMAP src, int srcx, int srcy)
++{
++	int ox, oy;
++	ox = x;
++	oy = y;
++
++	if (vncwinClipRect(&x, &y, &cx, &cy))
++	{
++		//if we clipped top or left, we have to adjust srcx,srcy;
++		srcx += x - ox;
++		srcy += y - oy;
++		switch (ROP2_S(opcode))
++		{
++			case ROP2_OR:
++				vncTransBlitFrom(server, x, y, cx, cy, (vncBuffer *) src, srcx,
++						 srcy, 0x0);
++				break;
++			case ROP2_XOR:
++				vncXorBlitFrom(server, x, y, cx, cy, (vncBuffer *) src, srcx, srcy);
++				break;
++			case ROP2_AND:
++				vncAndBlitFrom(server, x, y, cx, cy, (vncBuffer *) src, srcx, srcy);
++				break;
++			case ROP2_COPY:
++				vncCopyBlitFrom(server, x, y, cx, cy, (vncBuffer *) src, srcx,
++						srcy);
++				break;
++			default:
++				unimpl("ui_memblt: op%d %d,%d %dx%d\n", opcode, x, y, cx, cy);
++				vncCopyBlitFrom(server, x, y, cx, cy, (vncBuffer *) src, srcx,
++						srcy);
++				break;
++		}
++	}
++}
++
++void
++ui_triblt(uint8 opcode,
++	  /* dest */ int x, int y, int cx, int cy,
++	  /* src */ HBITMAP src, int srcx, int srcy,
++	  /* brush */ BRUSH * brush, int bgcolour, int fgcolour)
++{
++	/* This is potentially difficult to do in general. Until someone
++	   comes up with a more efficient way of doing it I am using cases. */
++
++	switch (opcode)
++	{
++		case 0x69:	/* PDSxxn */
++			ui_memblt(ROP2_XOR, x, y, cx, cy, src, srcx, srcy);
++			ui_patblt(ROP2_NXOR, x, y, cx, cy, brush, bgcolour, fgcolour);
++			break;
++
++		case 0xb8:	/* PSDPxax */
++			ui_patblt(ROP2_XOR, x, y, cx, cy, brush, bgcolour, fgcolour);
++			ui_memblt(ROP2_AND, x, y, cx, cy, src, srcx, srcy);
++			ui_patblt(ROP2_XOR, x, y, cx, cy, brush, bgcolour, fgcolour);
++			break;
++
++		default:
++			unimpl("ui_triblt 1x%x\n", opcode);
++			ui_memblt(ROP2_COPY, x, y, cx, cy, src, srcx, srcy);
++	}
++
++}
++
++void
++ui_line(uint8 opcode,
++	/* dest */ int startx, int starty, int endx, int endy,
++	/* pen */ PEN * pen)
++{
++	//vncSetRect(server,startx,starty,1+endx-startx,endy-starty,pen->colour);
++	//unimpl("drawline: pen colour=%d\n",pen->colour);
++	/* TODO: implement opcodes */
++	rfbDrawLine(server, startx, starty, endx, endy, pen->colour);
++}
++
++void
++ui_rect(
++	       /* dest */ int x, int y, int cx, int cy,
++	       /* brush */ int colour)
++{
++	if (vncwinClipRect(&x, &y, &cx, &cy))
++	{
++		vncSetRect(server, x, y, cx, cy, colour);
++	}
++}
++
++void
++ui_draw_glyph(int mixmode,
++	      /* dest */ int x, int y, int cx, int cy,
++	      /* src */ HGLYPH glyph, int srcx, int srcy,
++	      /* colours */ int bgcolour, int fgcolour)
++{
++	int xx, yy;
++	int ox, oy;
++	vncBuffer *buf = vncDupBuffer(glyph);
++
++	x &= 0xffff;
++	y &= 0xffff;
++
++	/* yes, sometimes same fgcolour and bgcolour are sent, but because
++	 * of transparency, we have to change that! */
++	if (mixmode == MIX_TRANSPARENT && fgcolour == bgcolour)
++		bgcolour = fgcolour ^ 0xff;
++
++	ox = x;
++	oy = y;
++
++	for (yy = srcy; yy < srcy + cy; yy++)
++	{
++		for (xx = srcx; xx < srcx + cx; xx++)
++		{
++			vncSetPixel(buf, xx, yy, vncGetPixel(buf, xx, yy) ? fgcolour : bgcolour);
++		}
++	}
++
++	switch (mixmode)
++	{
++		case MIX_TRANSPARENT:
++			if (vncwinClipRect(&x, &y, &cx, &cy))
++			{
++				//if we clipped top or left, we have to adjust srcx,srcy;
++				srcx += x - ox;
++				srcy += y - oy;
++				vncTransBlitFrom(server, x, y, cx, cy, buf, srcx, srcy, bgcolour);
++			}
++			break;
++		case MIX_OPAQUE:
++			if (vncwinClipRect(&x, &y, &cx, &cy))
++			{
++				//if we clipped top or left, we have to adjust srcx,srcy;
++				srcx += x - ox;
++				srcy += y - oy;
++				vncCopyBlitFrom(server, x, y, cx, cy, buf, srcx, srcy);
++			}
++			break;
++
++		default:
++			unimpl("mix %d\n", mixmode);
++	}
++	vncDeleteBuffer(buf);
++}
++
++#define DO_GLYPH(ttext,idx) \
++{\
++  glyph = cache_get_font (font, ttext[idx]);\
++  if (!(flags & TEXT2_IMPLICIT_X))\
++    {\
++      offset = ttext[++idx];\
++      if ((offset & 0x80))\
++        offset = ((offset & 0x7f) << 8) | ttext[++idx];\
++      if (flags & TEXT2_VERTICAL)\
++            y += offset;\
++          else\
++            x += offset;\
++    }\
++  if (glyph != NULL)\
++    {\
++      ui_draw_glyph (mixmode, x + (short) glyph->offset,\
++                     y + (short) glyph->baseline,\
++                     glyph->width, glyph->height,\
++                     glyph->pixmap, 0, 0, bgcolour, fgcolour);\
++      if (flags & TEXT2_IMPLICIT_X)\
++        x += glyph->width;\
++    }\
++}
++
++
++void
++ui_draw_text(uint8 font, uint8 flags, int mixmode, int x, int y,
++	     int clipx, int clipy, int clipcx, int clipcy,
++	     int boxx, int boxy, int boxcx, int boxcy,
++	     int bgcolour, int fgcolour, uint8 * text, uint8 length)
++{
++	FONTGLYPH *glyph;
++	int i, j, offset;
++	DATABLOB *entry;
++
++	if (boxcx > 1)
++	{
++		ui_rect(boxx, boxy, boxcx, boxcy, bgcolour);
++	}
++	else if (mixmode == MIX_OPAQUE)
++	{
++		ui_rect(clipx, clipy, clipcx, clipcy, bgcolour);
++	}
++
++	/* Paint text, character by character */
++	for (i = 0; i < length;)
++	{
++		switch (text[i])
++		{
++			case 0xff:
++				if (i + 2 < length)
++					cache_put_text(text[i + 1], &(text[i - text[i + 2]]),
++						       text[i + 2]);
++				else
++				{
++					error("this shouldn't be happening\n");
++					break;
++				}
++				/* this will move pointer from start to first character after FF command */
++				length -= i + 3;
++				text = &(text[i + 3]);
++				i = 0;
++				break;
++
++			case 0xfe:
++				entry = cache_get_text(text[i + 1]);
++				if (entry != NULL)
++				{
++					if ((((uint8 *) (entry->data))[1] == 0)
++					    && (!(flags & TEXT2_IMPLICIT_X)))
++					{
++						if (flags & 0x04)	/* vertical text */
++							y += text[i + 2];
++						else
++							x += text[i + 2];
++					}
++					if (i + 2 < length)
++						i += 3;
++					else
++						i += 2;
++					length -= i;
++					/* this will move pointer from start to first character after FE command */
++					text = &(text[i]);
++					i = 0;
++					for (j = 0; j < entry->size; j++)
++						DO_GLYPH(((uint8 *) (entry->data)), j);
++				}
++				break;
++			default:
++				DO_GLYPH(text, i);
++				i++;
++				break;
++		}
++	}
++}
++
++void
++ui_desktop_save(uint32 offset, int x, int y, int cx, int cy)
++{
++	vncBuffer *buf;
++
++	buf = vncGetRect(server, x, y, cx, cy);
++	offset *= TOBYTES(server->serverFormat.bitsPerPixel);
++	cache_put_desktop(offset, cx, cy, cx, TOBYTES(server->serverFormat.bitsPerPixel),
++			  (buf->data));
++}
++
++void
++ui_desktop_restore(uint32 offset, int x, int y, int cx, int cy)
++{
++	uint8 *data;
++	vncBuffer *buf;
++	int ox, oy, srcx, srcy;
++
++	srcx = srcy = 0;
++	ox = x;
++	oy = y;
++
++	offset *= TOBYTES(server->serverFormat.bitsPerPixel);
++	data = cache_get_desktop(offset, cx, cy, TOBYTES(server->serverFormat.bitsPerPixel));
++	if (data == NULL)
++		return;
++
++	buf = vncNewBuffer(cx, cy, 8);
++	memcpy(buf->data, data, cx * cy * 1);
++
++	if (vncwinClipRect(&x, &y, &cx, &cy))
++	{
++		srcx += x - ox;
++		srcy += y - oy;
++		vncCopyBlitFrom(server, x, y, cx, cy, buf, srcx, srcy);
++	}
++	vncDeleteBuffer(buf);
++}
++
++rfbPixelFormat vnc_formats[] = {
++	/* bpp, depth,BE,TC, rmax, gmax, bmax, rsh, gsh, bsh  */
++	{8, 8, 1, 0, 7, 7, 3, 0, 3, 6}
++	,
++	{16, 16, 1, 1, 31, 63, 31, 0, 5, 10}
++	,
++	{32, 24, 1, 1, 255, 255, 255, 0, 8, 16}
++	,			//non-existant
++	{32, 32, 1, 1, 2047, 2047, 1023, 0, 11, 22}
++};
++
++rfbPixelFormat *
++vncNewFormat(int depth)
++{
++	return &(vnc_formats[(depth + 1) / 8 - 1]);
++}
++
++vncBuffer *
++vncNewBuffer(int w, int h, int depth)
++{
++	vncBuffer *b = (vncBuffer *) xmalloc(sizeof(vncBuffer));
++	b->format = vncNewFormat(depth);
++	b->data = (void *) xmalloc(w * h * (b->format->bitsPerPixel / 8));
++	b->owner = 1;
++	b->w = w;
++	b->h = h;
++	b->linew = w;
++	return b;
++}
++
++vncBuffer *
++vncDupBuffer(vncBuffer * b)
++{
++	vncBuffer *buf = vncNewBuffer(b->w, b->h, b->format->depth);
++	memcpy(buf->data, b->data, b->linew * b->h * b->format->bitsPerPixel / 8);
++	return buf;
++}
++
++void
++vncPrintStats()
++{
++	if (server && server->clientHead)
++		rfbPrintStats(server->clientHead);
++}
++
++/* blit */
++
++#define GETPIXEL(buf,x,y) \
++     (((uint8_t*)(buf->data))[(x)+((y)*buf->linew)])
++#define SETPIXEL(buf,x,y,p) \
++     (((uint8_t*)(buf->data))[(x)+((y)*buf->linew)] = (uint8_t)p)
++
++void
++vncCopyBlitFromNoEncode(rfbScreenInfoPtr s, int x, int y, int w, int h,
++			vncBuffer * src, int srcx, int srcy)
++{
++	int xx, yy;
++
++	vncHideCursor();
++
++	if (s->serverFormat.bitsPerPixel == src->format->bitsPerPixel
++	    && srcx + w <= src->w && srcy + h <= src->h)
++	{
++		//simple copy
++		uint8_t *srcdata, *dstdata;
++		srcdata = src->data + (srcy * src->linew + srcx);
++		dstdata = s->frameBuffer + (y * s->paddedWidthInBytes + x);
++		for (yy = 0; yy < h; yy++)
++		{
++			memcpy(dstdata, srcdata, w);
++			dstdata += s->paddedWidthInBytes;
++			srcdata += src->linew;
++		}
++	}
++	else
++	{
++		// xsrc,ysrc provide tiling copy support.
++		for (yy = y; yy < y + h; yy++)
++		{
++			int ysrc = srcy + yy - y;
++			while (ysrc >= src->h)
++				ysrc -= src->h;
++			for (xx = x; xx < x + w; xx++)
++			{
++				vncPixel p;
++				int xsrc = srcx + xx - x;
++				while (xsrc >= src->linew)
++					xsrc -= src->linew;
++				p = GETPIXEL(src, xsrc, ysrc);
++				SETPIXEL(frameBuffer, xx, yy, p);
++			}
++		}
++	}
++}
++
++void
++vncCopyBlit(rfbScreenInfoPtr s, int x, int y, int w, int h, int srcx, int srcy)
++{
++	/* LibVNCServer already knows how to copy the data. */
++	rfbDoCopyRect(s, x, y, x + w, y + h, x - srcx, y - srcy);
++}
++
++void
++vncCopyBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h, vncBuffer * src, int srcx, int srcy)
++{
++	vncCopyBlitFromNoEncode(s, x, y, w, h, src, srcx, srcy);
++	rfbMarkRectAsModified(s, x, y, x + w, y + h);
++}
++
++void
++vncTransBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h,
++		 vncBuffer * src, int srcx, int srcy, int bg)
++{
++	int xx, yy;
++
++	vncHideCursor();
++
++	// xsrc,ysrc provide tiling copy support.
++	for (yy = y; yy < y + h; yy++)
++	{
++		int ysrc = srcy + yy - y;
++		while (ysrc >= src->h)
++			ysrc -= src->h;
++		for (xx = x; xx < x + w; xx++)
++		{
++			vncPixel p;
++			int xsrc = srcx + xx - x;
++			while (xsrc >= src->linew)
++				xsrc -= src->linew;
++			p = GETPIXEL(src, xsrc, ysrc);
++			// transparent blit!
++			if (p != bg)
++				SETPIXEL(frameBuffer, xx, yy, p);
++		}
++	}
++
++	rfbMarkRectAsModified(s, x, y, x + w, y + h);
++}
++
++void
++vncXorBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h, vncBuffer * src, int srcx, int srcy)
++{
++	int xx, yy;
++
++	vncHideCursor();
++
++	// xsrc,ysrc provide tiling copy support.
++	for (yy = y; yy < y + h; yy++)
++	{
++		int ysrc = srcy + yy - y;
++		while (ysrc >= src->h)
++			ysrc -= src->h;
++		for (xx = x; xx < x + w; xx++)
++		{
++			vncPixel p, pp;
++			int xsrc = srcx + xx - x;
++			while (xsrc >= src->linew)
++				xsrc -= src->linew;
++			p = GETPIXEL(src, xsrc, ysrc);
++			pp = GETPIXEL(frameBuffer, xx, yy);
++			// xor blit!
++			SETPIXEL(frameBuffer, xx, yy, p ^ pp);
++		}
++	}
++
++	rfbMarkRectAsModified(s, x, y, x + w, y + h);
++}
++
++void
++vncAndBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h, vncBuffer * src, int srcx, int srcy)
++{
++	int xx, yy;
++
++	vncHideCursor();
++
++	// xsrc,ysrc provide tiling copy support.
++	for (yy = y; yy < y + h; yy++)
++	{
++		int ysrc = srcy + yy - y;
++		while (ysrc >= src->h)
++			ysrc -= src->h;
++		for (xx = x; xx < x + w; xx++)
++		{
++			vncPixel p, pp;
++			int xsrc = srcx + xx - x;
++			while (xsrc >= src->linew)
++				xsrc -= src->linew;
++			p = GETPIXEL(src, xsrc, ysrc);
++			pp = GETPIXEL(frameBuffer, xx, yy);
++			// and blit!
++			SETPIXEL(frameBuffer, xx, yy, p & pp);
++		}
++	}
++
++	rfbMarkRectAsModified(s, x, y, x + w, y + h);
++}
++
++void
++vncDeleteBuffer(vncBuffer * b)
++{
++	if (b->owner)
++		xfree(b->data);
++	xfree(b);
++}
++
++/* cursor */
++rfbCursorPtr
++vncNewCursor(vncBuffer * mask, vncBuffer * pointer, int hotx, int hoty)
++{
++	int i, j, w = (mask->w + 7) / 8, mask_size = w * mask->h,
++		pointer_size = pointer->w * pointer->h;
++	rfbCursorPtr c = (rfbCursorPtr) xmalloc(sizeof(rfbCursor));
++
++	if (mask->w != pointer->w || mask->h != pointer->h)
++		error("ERROR! Mask is %dx%d, Pointer is %dx%d\n",
++		      mask->w, mask->h, pointer->w, pointer->h);
++
++	c->xhot = hotx;
++	c->yhot = hoty;
++	c->width = mask->w;
++	c->height = mask->h;
++
++	c->mask = (char *) xmalloc(mask_size);
++	for (j = 0; j < c->height; j++)
++		for (i = 0; i < w; i++)
++			c->mask[j * w + i] =
++				reverseByte[((unsigned char *) mask->data)[(j) * w + i]];
++	vncDeleteBuffer(mask);
++
++	c->source = 0;
++	c->richSource = (char *) xmalloc(pointer_size);
++	memcpy(c->richSource, pointer->data, pointer_size);
++	vncDeleteBuffer(pointer);
++
++	return c;
++}
++
++/* No FreeCursor, because the cursors are buffered. We only get a "HANDLE" */
++void
++vncSetCursor(rfbScreenInfoPtr s, rfbCursorPtr c)
++{
++	rfbSetCursor(s, c, FALSE);
++}
++
++/* these functions work even if vncBuffer's pixel format is not 1 byte/pixel */
++vncPixel
++vncGetPixel(vncBuffer * b, int x, int y)
++{
++	unsigned long offset = (x + (y * (b->linew))) * (b->format->bitsPerPixel >> 3);
++	return ((uint8_t *) (b->data))[offset];
++}
++
++void
++vncSetPixel(vncBuffer * b, int x, int y, vncPixel c)
++{
++	unsigned long offset = (x + (y * (b->linew))) * (b->format->bitsPerPixel >> 3);
++	((uint8_t *) (b->data))[offset] = c;
++}
++
++void
++vncSetRect(rfbScreenInfoPtr s, int x, int y, int w, int h, vncPixel c)
++{
++	int xx, yy;
++
++	if (x + w > s->width)
++		w = s->width - x;
++	if (y + h > s->height)
++		h = s->height - y;
++	if (w <= 0 || h <= 0)
++		return;
++
++	vncHideCursor();
++
++	// - Fill the rect in the local framebuffer
++	if (s->serverFormat.bitsPerPixel == 8)
++	{
++		// - Simple 8-bit fill
++		uint8_t *dstdata;
++		dstdata = s->frameBuffer + (y * s->paddedWidthInBytes + x);
++		for (yy = 0; yy < h; yy++)
++		{
++			memset(dstdata, c, w);
++			dstdata += s->paddedWidthInBytes;
++		}
++	}
++	else
++	{
++		for (yy = y; yy < y + h; yy++)
++		{
++			for (xx = x; xx < x + w; xx++)
++			{
++				SETPIXEL(frameBuffer, xx, yy, c);
++			}
++		}
++	}
++
++	rfbMarkRectAsModified(s, x, y, x + w, y + h);
++}
++
++vncBuffer *
++vncGetRect(rfbScreenInfoPtr s, int x, int y, int w, int h)
++{
++	int xx, yy;
++	vncBuffer *b = vncNewBuffer(w, h, s->serverFormat.depth);
++
++	vncHideCursor();
++
++	if (s->serverFormat.bitsPerPixel == 8)
++	{
++		//simple copy
++		int srcstep, dststep;
++		char *srcdata, *dstdata;
++		srcstep = s->paddedWidthInBytes * s->serverFormat.bitsPerPixel / 8;
++		dststep = w * s->serverFormat.bitsPerPixel / 8;
++		dstdata = b->data;
++		srcdata = s->frameBuffer + (y * srcstep + x * s->serverFormat.bitsPerPixel / 8);
++		for (yy = 0; yy < h; yy++)
++		{
++			memcpy(dstdata, srcdata, dststep);
++			dstdata += dststep;
++			srcdata += srcstep;
++		}
++	}
++	else
++	{
++		for (yy = y; yy < y + h; yy++)
++		{
++			for (xx = x; xx < x + w; xx++)
++			{
++				SETPIXEL(b, xx - x, yy - y, GETPIXEL(frameBuffer, xx, yy));
++			}
++		}
++	}
++
++	return b;
++}
++
++/* colourmap */
++
++rfbColourMap *
++vncNewColourMap(rfbScreenInfoPtr s, int n)
++{
++	rfbColourMap *m = (rfbColourMap *) xmalloc(sizeof(rfbColourMap));
++	m->is16 = FALSE;
++	m->count = n;
++	m->data.bytes = (uint8_t *) xmalloc(n * 3);
++	return m;
++}
++
++void
++vncSetColourMapEntry(rfbColourMap * m, int i, vncPixel r, vncPixel g, vncPixel b)
++{
++	if (i < m->count)
++	{
++		m->data.bytes[3 * i + 0] = r;
++		m->data.bytes[3 * i + 1] = g;
++		m->data.bytes[3 * i + 2] = b;
++	}
++}
++
++void
++vncDeleteColourMap(rfbColourMap * m)
++{
++	if (m->data.bytes)
++		free(m->data.bytes);
++	m->count = 0;
++}
++
++void
++vncSetColourMap(rfbScreenInfoPtr s, rfbColourMap * m)
++{
++	vncDeleteColourMap(&s->colourMap);
++	s->colourMap = *m;
++	rfbSetClientColourMaps(s, 0, 0);
++}
++
++void
++ui_begin_update()
++{
++}
++
++void
++ui_end_update()
++{
++}
++
++void
++ui_resize_window()
++{
++	rfbClientIteratorPtr iter;
++	rfbClientPtr cl;
++
++	server->width = g_width;
++	server->height = g_height;
++	server->frameBuffer = (char *) realloc(server->frameBuffer, g_width * g_height);
++	server->paddedWidthInBytes = g_width;
++
++	iter = rfbGetClientIterator(server);
++	while ((cl = rfbClientIteratorNext(iter)))
++		if (cl->useNewFBSize)
++			cl->newFBSizePending = TRUE;
++		else
++			rfbLog("Warning: Client %s does not support NewFBSize!\n ", cl->host);
++	rfbReleaseClientIterator(iter);
++}
+diff -urN rdesktop-1.5.0.org/vnc/vnc.h rdesktop-1.5.0/vnc/vnc.h
+--- rdesktop-1.5.0.org/vnc/vnc.h	1970-01-01 01:00:00.000000000 +0100
++++ rdesktop-1.5.0/vnc/vnc.h	2003-02-20 13:17:04.000000000 +0100
+@@ -0,0 +1,68 @@
++#ifndef VNC_H
++#define VNC_H
++
++#define BOOL rfb_BOOL
++#include <rfb/rfb.h>
++#undef BOOL
++
++typedef unsigned int vncPixel;
++
++typedef struct
++{
++	uint16_t w, h;
++	uint16_t linew;
++	rfbPixelFormat *format;
++	char *data;
++	BOOL owner;
++}
++vncBuffer;
++
++extern int vncPreparedClientSocket;
++extern int vncPreparedServerSocket;
++
++/* - Buffer management */
++extern vncBuffer *vncNewBuffer(int w, int h, int depth);
++extern vncBuffer *vncDupBuffer(vncBuffer * b);
++extern void vncDeleteBuffer(vncBuffer * b);
++
++/* - Colourmaps */
++typedef struct
++{
++	uint8_t r, g, b;
++}
++vncColour;
++
++extern void vncSetColourMap(rfbScreenInfoPtr s, rfbColourMap * m);
++extern rfbColourMap *vncNewColourMap(rfbScreenInfoPtr s, int n);
++extern void vncSetColourMapEntry(rfbColourMap * m, int i, vncPixel r, vncPixel g, vncPixel b);
++extern void vncDeleteColourMap(rfbColourMap * m);
++
++/* - Simple pixel manipulation */
++extern vncPixel vncGetPixel(vncBuffer * b, int x, int y);
++extern void vncSetPixel(vncBuffer * b, int x, int y, vncPixel c);
++
++/* - Drawing primitives */
++extern void vncSetRect(rfbScreenInfoPtr s, int x, int y, int w, int h, vncPixel c);
++extern void vncCopyBlit(rfbScreenInfoPtr s, int x, int y, int w, int h, int srcx, int srcy);
++extern void vncCopyBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h,
++			    vncBuffer * b, int srcx, int srcy);
++extern void vncTransBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h,
++			     vncBuffer * b, int srcx, int srcy, int bg);
++extern void vncXorBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h,
++			   vncBuffer * b, int srcx, int srcy);
++extern void vncAndBlitFrom(rfbScreenInfoPtr s, int x, int y, int w, int h,
++			   vncBuffer * b, int srcx, int srcy);
++extern vncBuffer *vncGetRect(rfbScreenInfoPtr s, int x, int y, int w, int h);
++
++// - Low level VNC update primitives upon which the rest are based
++extern void vncQueueCopyRect(rfbScreenInfoPtr s, int x, int y, int w, int h, int src_x, int src_y);
++extern void vncQueueUpdate(rfbScreenInfoPtr s, int x, int y, int w, int h);
++
++/* cursor */
++extern rfbCursorPtr vncNewCursor(vncBuffer * mask, vncBuffer * pointer, int hotx, int hoty);
++extern void vncSetCursor(rfbScreenInfoPtr s, rfbCursorPtr c);
++
++int vncListenAtTcpAddr(unsigned short port);
++void vncPrintStats();
++
++#endif
+diff -urN rdesktop-1.5.0.org/vnc/x11stubs.c rdesktop-1.5.0/vnc/x11stubs.c
+--- rdesktop-1.5.0.org/vnc/x11stubs.c	1970-01-01 01:00:00.000000000 +0100
++++ rdesktop-1.5.0/vnc/x11stubs.c	2003-02-20 13:14:13.000000000 +0100
+@@ -0,0 +1,1405 @@
++/*
++
++This file fakes some of X11's key handling for the special purpose of running
++a standalone rdp2vnc (without linking to X11)
++
++*/
++
++#include "x11stubs.h"
++#include <string.h>
++
++/* ignored */
++int *display;
++
++typedef struct
++{
++	const char *string;
++	KeySym keysym;
++}
++StringToKeysym_t;
++
++StringToKeysym_t StringToKeysym[] = {
++#ifndef KEYSYMFAKE_H
++	{"VoidSymbol", XK_VoidSymbol},
++#ifdef XK_MISCELLANY
++	{"BackSpace", XK_BackSpace},
++	{"Tab", XK_Tab},
++	{"Linefeed", XK_Linefeed},
++	{"Clear", XK_Clear},
++	{"Return", XK_Return},
++	{"Pause", XK_Pause},
++	{"Scroll_Lock", XK_Scroll_Lock},
++	{"Sys_Req", XK_Sys_Req},
++	{"Escape", XK_Escape},
++	{"Delete", XK_Delete},
++	{"Multi_key", XK_Multi_key},
++	{"SingleCandidate", XK_SingleCandidate},
++	{"MultipleCandidate", XK_MultipleCandidate},
++	{"PreviousCandidate", XK_PreviousCandidate},
++	{"Kanji", XK_Kanji},
++	{"Muhenkan", XK_Muhenkan},
++	{"Henkan_Mode", XK_Henkan_Mode},
++	{"Henkan", XK_Henkan},
++	{"Romaji", XK_Romaji},
++	{"Hiragana", XK_Hiragana},
++	{"Katakana", XK_Katakana},
++	{"Hiragana_Katakana", XK_Hiragana_Katakana},
++	{"Zenkaku", XK_Zenkaku},
++	{"Hankaku", XK_Hankaku},
++	{"Zenkaku_Hankaku", XK_Zenkaku_Hankaku},
++	{"Touroku", XK_Touroku},
++	{"Massyo", XK_Massyo},
++	{"Kana_Lock", XK_Kana_Lock},
++	{"Kana_Shift", XK_Kana_Shift},
++	{"Eisu_Shift", XK_Eisu_Shift},
++	{"Eisu_toggle", XK_Eisu_toggle},
++	{"Zen_Koho", XK_Zen_Koho},
++	{"Mae_Koho", XK_Mae_Koho},
++	{"Home", XK_Home},
++	{"Left", XK_Left},
++	{"Up", XK_Up},
++	{"Right", XK_Right},
++	{"Down", XK_Down},
++	{"Prior", XK_Prior},
++	{"Page_Up", XK_Page_Up},
++	{"Next", XK_Next},
++	{"Page_Down", XK_Page_Down},
++	{"End", XK_End},
++	{"Begin", XK_Begin},
++	{"Select", XK_Select},
++	{"Print", XK_Print},
++	{"Execute", XK_Execute},
++	{"Insert", XK_Insert},
++	{"Undo", XK_Undo},
++	{"Redo", XK_Redo},
++	{"Menu", XK_Menu},
++	{"Find", XK_Find},
++	{"Cancel", XK_Cancel},
++	{"Help", XK_Help},
++	{"Break", XK_Break},
++	{"Mode_switch", XK_Mode_switch},
++	{"script_switch", XK_script_switch},
++	{"Num_Lock", XK_Num_Lock},
++	{"KP_Space", XK_KP_Space},
++	{"KP_Tab", XK_KP_Tab},
++	{"KP_Enter", XK_KP_Enter},
++	{"KP_F1", XK_KP_F1},
++	{"KP_F2", XK_KP_F2},
++	{"KP_F3", XK_KP_F3},
++	{"KP_F4", XK_KP_F4},
++	{"KP_Home", XK_KP_Home},
++	{"KP_Left", XK_KP_Left},
++	{"KP_Up", XK_KP_Up},
++	{"KP_Right", XK_KP_Right},
++	{"KP_Down", XK_KP_Down},
++	{"KP_Prior", XK_KP_Prior},
++	{"KP_Page_Up", XK_KP_Page_Up},
++	{"KP_Next", XK_KP_Next},
++	{"KP_Page_Down", XK_KP_Page_Down},
++	{"KP_End", XK_KP_End},
++	{"KP_Begin", XK_KP_Begin},
++	{"KP_Insert", XK_KP_Insert},
++	{"KP_Delete", XK_KP_Delete},
++	{"KP_Equal", XK_KP_Equal},
++	{"KP_Multiply", XK_KP_Multiply},
++	{"KP_Add", XK_KP_Add},
++	{"KP_Separator", XK_KP_Separator},
++	{"KP_Subtract", XK_KP_Subtract},
++	{"KP_Decimal", XK_KP_Decimal},
++	{"KP_Divide", XK_KP_Divide},
++	{"KP_0", XK_KP_0},
++	{"KP_1", XK_KP_1},
++	{"KP_2", XK_KP_2},
++	{"KP_3", XK_KP_3},
++	{"KP_4", XK_KP_4},
++	{"KP_5", XK_KP_5},
++	{"KP_6", XK_KP_6},
++	{"KP_7", XK_KP_7},
++	{"KP_8", XK_KP_8},
++	{"KP_9", XK_KP_9},
++	{"F1", XK_F1},
++	{"F2", XK_F2},
++	{"F3", XK_F3},
++	{"F4", XK_F4},
++	{"F5", XK_F5},
++	{"F6", XK_F6},
++	{"F7", XK_F7},
++	{"F8", XK_F8},
++	{"F9", XK_F9},
++	{"F10", XK_F10},
++	{"F11", XK_F11},
++	{"L1", XK_L1},
++	{"F12", XK_F12},
++	{"L2", XK_L2},
++	{"F13", XK_F13},
++	{"L3", XK_L3},
++	{"F14", XK_F14},
++	{"L4", XK_L4},
++	{"F15", XK_F15},
++	{"L5", XK_L5},
++	{"F16", XK_F16},
++	{"L6", XK_L6},
++	{"F17", XK_F17},
++	{"L7", XK_L7},
++	{"F18", XK_F18},
++	{"L8", XK_L8},
++	{"F19", XK_F19},
++	{"L9", XK_L9},
++	{"F20", XK_F20},
++	{"L10", XK_L10},
++	{"F21", XK_F21},
++	{"R1", XK_R1},
++	{"F22", XK_F22},
++	{"R2", XK_R2},
++	{"F23", XK_F23},
++	{"R3", XK_R3},
++	{"F24", XK_F24},
++	{"R4", XK_R4},
++	{"F25", XK_F25},
++	{"R5", XK_R5},
++	{"F26", XK_F26},
++	{"R6", XK_R6},
++	{"F27", XK_F27},
++	{"R7", XK_R7},
++	{"F28", XK_F28},
++	{"R8", XK_R8},
++	{"F29", XK_F29},
++	{"R9", XK_R9},
++	{"F30", XK_F30},
++	{"R10", XK_R10},
++	{"F31", XK_F31},
++	{"R11", XK_R11},
++	{"F32", XK_F32},
++	{"R12", XK_R12},
++	{"F33", XK_F33},
++	{"R13", XK_R13},
++	{"F34", XK_F34},
++	{"R14", XK_R14},
++	{"F35", XK_F35},
++	{"R15", XK_R15},
++	{"Shift_L", XK_Shift_L},
++	{"Shift_R", XK_Shift_R},
++	{"Control_L", XK_Control_L},
++	{"Control_R", XK_Control_R},
++	{"Caps_Lock", XK_Caps_Lock},
++	{"Shift_Lock", XK_Shift_Lock},
++	{"Meta_L", XK_Meta_L},
++	{"Meta_R", XK_Meta_R},
++	{"Alt_L", XK_Alt_L},
++	{"Alt_R", XK_Alt_R},
++	{"Super_L", XK_Super_L},
++	{"Super_R", XK_Super_R},
++	{"Hyper_L", XK_Hyper_L},
++	{"Hyper_R", XK_Hyper_R},
++#endif /* XK_MISCELLANY */
++#ifdef XK_XKB_KEYS
++	{"ISO_Lock", XK_ISO_Lock},
++	{"ISO_Level2_Latch", XK_ISO_Level2_Latch},
++	{"ISO_Level3_Shift", XK_ISO_Level3_Shift},
++	{"ISO_Level3_Latch", XK_ISO_Level3_Latch},
++	{"ISO_Level3_Lock", XK_ISO_Level3_Lock},
++	{"ISO_Group_Shift", XK_ISO_Group_Shift},
++	{"ISO_Group_Latch", XK_ISO_Group_Latch},
++	{"ISO_Group_Lock", XK_ISO_Group_Lock},
++	{"ISO_Next_Group", XK_ISO_Next_Group},
++	{"ISO_Next_Group_Lock", XK_ISO_Next_Group_Lock},
++	{"ISO_Prev_Group", XK_ISO_Prev_Group},
++	{"ISO_Prev_Group_Lock", XK_ISO_Prev_Group_Lock},
++	{"ISO_First_Group", XK_ISO_First_Group},
++	{"ISO_First_Group_Lock", XK_ISO_First_Group_Lock},
++	{"ISO_Last_Group", XK_ISO_Last_Group},
++	{"ISO_Last_Group_Lock", XK_ISO_Last_Group_Lock},
++	{"ISO_Left_Tab", XK_ISO_Left_Tab},
++	{"ISO_Move_Line_Up", XK_ISO_Move_Line_Up},
++	{"ISO_Move_Line_Down", XK_ISO_Move_Line_Down},
++	{"ISO_Partial_Line_Up", XK_ISO_Partial_Line_Up},
++	{"ISO_Partial_Line_Down", XK_ISO_Partial_Line_Down},
++	{"ISO_Partial_Space_Left", XK_ISO_Partial_Space_Left},
++	{"ISO_Partial_Space_Right", XK_ISO_Partial_Space_Right},
++	{"ISO_Set_Margin_Left", XK_ISO_Set_Margin_Left},
++	{"ISO_Set_Margin_Right", XK_ISO_Set_Margin_Right},
++	{"ISO_Release_Margin_Left", XK_ISO_Release_Margin_Left},
++	{"ISO_Release_Margin_Right", XK_ISO_Release_Margin_Right},
++	{"ISO_Release_Both_Margins", XK_ISO_Release_Both_Margins},
++	{"ISO_Fast_Cursor_Left", XK_ISO_Fast_Cursor_Left},
++	{"ISO_Fast_Cursor_Right", XK_ISO_Fast_Cursor_Right},
++	{"ISO_Fast_Cursor_Up", XK_ISO_Fast_Cursor_Up},
++	{"ISO_Fast_Cursor_Down", XK_ISO_Fast_Cursor_Down},
++	{"ISO_Continuous_Underline", XK_ISO_Continuous_Underline},
++	{"ISO_Discontinuous_Underline", XK_ISO_Discontinuous_Underline},
++	{"ISO_Emphasize", XK_ISO_Emphasize},
++	{"ISO_Center_Object", XK_ISO_Center_Object},
++	{"ISO_Enter", XK_ISO_Enter},
++	{"dead_grave", XK_dead_grave},
++	{"dead_acute", XK_dead_acute},
++	{"dead_circumflex", XK_dead_circumflex},
++	{"dead_tilde", XK_dead_tilde},
++	{"dead_macron", XK_dead_macron},
++	{"dead_breve", XK_dead_breve},
++	{"dead_abovedot", XK_dead_abovedot},
++	{"dead_diaeresis", XK_dead_diaeresis},
++	{"dead_abovering", XK_dead_abovering},
++	{"dead_doubleacute", XK_dead_doubleacute},
++	{"dead_caron", XK_dead_caron},
++	{"dead_cedilla", XK_dead_cedilla},
++	{"dead_ogonek", XK_dead_ogonek},
++	{"dead_iota", XK_dead_iota},
++	{"dead_voiced_sound", XK_dead_voiced_sound},
++	{"dead_semivoiced_sound", XK_dead_semivoiced_sound},
++	{"dead_belowdot", XK_dead_belowdot},
++	{"First_Virtual_Screen", XK_First_Virtual_Screen},
++	{"Prev_Virtual_Screen", XK_Prev_Virtual_Screen},
++	{"Next_Virtual_Screen", XK_Next_Virtual_Screen},
++	{"Last_Virtual_Screen", XK_Last_Virtual_Screen},
++	{"Terminate_Server", XK_Terminate_Server},
++	{"AccessX_Enable", XK_AccessX_Enable},
++	{"AccessX_Feedback_Enable", XK_AccessX_Feedback_Enable},
++	{"RepeatKeys_Enable", XK_RepeatKeys_Enable},
++	{"SlowKeys_Enable", XK_SlowKeys_Enable},
++	{"BounceKeys_Enable", XK_BounceKeys_Enable},
++	{"StickyKeys_Enable", XK_StickyKeys_Enable},
++	{"MouseKeys_Enable", XK_MouseKeys_Enable},
++	{"MouseKeys_Accel_Enable", XK_MouseKeys_Accel_Enable},
++	{"Overlay1_Enable", XK_Overlay1_Enable},
++	{"Overlay2_Enable", XK_Overlay2_Enable},
++	{"AudibleBell_Enable", XK_AudibleBell_Enable},
++	{"Pointer_Left", XK_Pointer_Left},
++	{"Pointer_Right", XK_Pointer_Right},
++	{"Pointer_Up", XK_Pointer_Up},
++	{"Pointer_Down", XK_Pointer_Down},
++	{"Pointer_UpLeft", XK_Pointer_UpLeft},
++	{"Pointer_UpRight", XK_Pointer_UpRight},
++	{"Pointer_DownLeft", XK_Pointer_DownLeft},
++	{"Pointer_DownRight", XK_Pointer_DownRight},
++	{"Pointer_Button_Dflt", XK_Pointer_Button_Dflt},
++	{"Pointer_Button1", XK_Pointer_Button1},
++	{"Pointer_Button2", XK_Pointer_Button2},
++	{"Pointer_Button3", XK_Pointer_Button3},
++	{"Pointer_Button4", XK_Pointer_Button4},
++	{"Pointer_Button5", XK_Pointer_Button5},
++	{"Pointer_DblClick_Dflt", XK_Pointer_DblClick_Dflt},
++	{"Pointer_DblClick1", XK_Pointer_DblClick1},
++	{"Pointer_DblClick2", XK_Pointer_DblClick2},
++	{"Pointer_DblClick3", XK_Pointer_DblClick3},
++	{"Pointer_DblClick4", XK_Pointer_DblClick4},
++	{"Pointer_DblClick5", XK_Pointer_DblClick5},
++	{"Pointer_Drag_Dflt", XK_Pointer_Drag_Dflt},
++	{"Pointer_Drag1", XK_Pointer_Drag1},
++	{"Pointer_Drag2", XK_Pointer_Drag2},
++	{"Pointer_Drag3", XK_Pointer_Drag3},
++	{"Pointer_Drag4", XK_Pointer_Drag4},
++	{"Pointer_Drag5", XK_Pointer_Drag5},
++	{"Pointer_EnableKeys", XK_Pointer_EnableKeys},
++	{"Pointer_Accelerate", XK_Pointer_Accelerate},
++	{"Pointer_DfltBtnNext", XK_Pointer_DfltBtnNext},
++	{"Pointer_DfltBtnPrev", XK_Pointer_DfltBtnPrev},
++#endif
++#ifdef XK_3270
++	{"3270_Duplicate", XK_3270_Duplicate},
++	{"3270_FieldMark", XK_3270_FieldMark},
++	{"3270_Right2", XK_3270_Right2},
++	{"3270_Left2", XK_3270_Left2},
++	{"3270_BackTab", XK_3270_BackTab},
++	{"3270_EraseEOF", XK_3270_EraseEOF},
++	{"3270_EraseInput", XK_3270_EraseInput},
++	{"3270_Reset", XK_3270_Reset},
++	{"3270_Quit", XK_3270_Quit},
++	{"3270_PA1", XK_3270_PA1},
++	{"3270_PA2", XK_3270_PA2},
++	{"3270_PA3", XK_3270_PA3},
++	{"3270_Test", XK_3270_Test},
++	{"3270_Attn", XK_3270_Attn},
++	{"3270_CursorBlink", XK_3270_CursorBlink},
++	{"3270_AltCursor", XK_3270_AltCursor},
++	{"3270_KeyClick", XK_3270_KeyClick},
++	{"3270_Jump", XK_3270_Jump},
++	{"3270_Ident", XK_3270_Ident},
++	{"3270_Rule", XK_3270_Rule},
++	{"3270_Copy", XK_3270_Copy},
++	{"3270_Play", XK_3270_Play},
++	{"3270_Setup", XK_3270_Setup},
++	{"3270_Record", XK_3270_Record},
++	{"3270_ChangeScreen", XK_3270_ChangeScreen},
++	{"3270_DeleteWord", XK_3270_DeleteWord},
++	{"3270_ExSelect", XK_3270_ExSelect},
++	{"3270_CursorSelect", XK_3270_CursorSelect},
++	{"3270_PrintScreen", XK_3270_PrintScreen},
++	{"3270_Enter", XK_3270_Enter},
++#endif
++#ifdef XK_LATIN1
++	{"space", XK_space},
++	{"exclam", XK_exclam},
++	{"quotedbl", XK_quotedbl},
++	{"numbersign", XK_numbersign},
++	{"dollar", XK_dollar},
++	{"percent", XK_percent},
++	{"ampersand", XK_ampersand},
++	{"apostrophe", XK_apostrophe},
++	{"quoteright", XK_quoteright},
++	{"parenleft", XK_parenleft},
++	{"parenright", XK_parenright},
++	{"asterisk", XK_asterisk},
++	{"plus", XK_plus},
++	{"comma", XK_comma},
++	{"minus", XK_minus},
++	{"period", XK_period},
++	{"slash", XK_slash},
++	{"0", XK_0},
++	{"1", XK_1},
++	{"2", XK_2},
++	{"3", XK_3},
++	{"4", XK_4},
++	{"5", XK_5},
++	{"6", XK_6},
++	{"7", XK_7},
++	{"8", XK_8},
++	{"9", XK_9},
++	{"colon", XK_colon},
++	{"semicolon", XK_semicolon},
++	{"less", XK_less},
++	{"equal", XK_equal},
++	{"greater", XK_greater},
++	{"question", XK_question},
++	{"at", XK_at},
++	{"A", XK_A},
++	{"B", XK_B},
++	{"C", XK_C},
++	{"D", XK_D},
++	{"E", XK_E},
++	{"F", XK_F},
++	{"G", XK_G},
++	{"H", XK_H},
++	{"I", XK_I},
++	{"J", XK_J},
++	{"K", XK_K},
++	{"L", XK_L},
++	{"M", XK_M},
++	{"N", XK_N},
++	{"O", XK_O},
++	{"P", XK_P},
++	{"Q", XK_Q},
++	{"R", XK_R},
++	{"S", XK_S},
++	{"T", XK_T},
++	{"U", XK_U},
++	{"V", XK_V},
++	{"W", XK_W},
++	{"X", XK_X},
++	{"Y", XK_Y},
++	{"Z", XK_Z},
++	{"bracketleft", XK_bracketleft},
++	{"backslash", XK_backslash},
++	{"bracketright", XK_bracketright},
++	{"asciicircum", XK_asciicircum},
++	{"underscore", XK_underscore},
++	{"grave", XK_grave},
++	{"quoteleft", XK_quoteleft},
++	{"a", XK_a},
++	{"b", XK_b},
++	{"c", XK_c},
++	{"d", XK_d},
++	{"e", XK_e},
++	{"f", XK_f},
++	{"g", XK_g},
++	{"h", XK_h},
++	{"i", XK_i},
++	{"j", XK_j},
++	{"k", XK_k},
++	{"l", XK_l},
++	{"m", XK_m},
++	{"n", XK_n},
++	{"o", XK_o},
++	{"p", XK_p},
++	{"q", XK_q},
++	{"r", XK_r},
++	{"s", XK_s},
++	{"t", XK_t},
++	{"u", XK_u},
++	{"v", XK_v},
++	{"w", XK_w},
++	{"x", XK_x},
++	{"y", XK_y},
++	{"z", XK_z},
++	{"braceleft", XK_braceleft},
++	{"bar", XK_bar},
++	{"braceright", XK_braceright},
++	{"asciitilde", XK_asciitilde},
++	{"nobreakspace", XK_nobreakspace},
++	{"exclamdown", XK_exclamdown},
++	{"cent", XK_cent},
++	{"sterling", XK_sterling},
++	{"currency", XK_currency},
++	{"yen", XK_yen},
++	{"brokenbar", XK_brokenbar},
++	{"section", XK_section},
++	{"diaeresis", XK_diaeresis},
++	{"copyright", XK_copyright},
++	{"ordfeminine", XK_ordfeminine},
++	{"guillemotleft", XK_guillemotleft},
++	{"notsign", XK_notsign},
++	{"hyphen", XK_hyphen},
++	{"registered", XK_registered},
++	{"macron", XK_macron},
++	{"degree", XK_degree},
++	{"plusminus", XK_plusminus},
++	{"twosuperior", XK_twosuperior},
++	{"threesuperior", XK_threesuperior},
++	{"acute", XK_acute},
++	{"mu", XK_mu},
++	{"paragraph", XK_paragraph},
++	{"periodcentered", XK_periodcentered},
++	{"cedilla", XK_cedilla},
++	{"onesuperior", XK_onesuperior},
++	{"masculine", XK_masculine},
++	{"guillemotright", XK_guillemotright},
++	{"onequarter", XK_onequarter},
++	{"onehalf", XK_onehalf},
++	{"threequarters", XK_threequarters},
++	{"questiondown", XK_questiondown},
++	{"Agrave", XK_Agrave},
++	{"Aacute", XK_Aacute},
++	{"Acircumflex", XK_Acircumflex},
++	{"Atilde", XK_Atilde},
++	{"Adiaeresis", XK_Adiaeresis},
++	{"Aring", XK_Aring},
++	{"AE", XK_AE},
++	{"Ccedilla", XK_Ccedilla},
++	{"Egrave", XK_Egrave},
++	{"Eacute", XK_Eacute},
++	{"Ecircumflex", XK_Ecircumflex},
++	{"Ediaeresis", XK_Ediaeresis},
++	{"Igrave", XK_Igrave},
++	{"Iacute", XK_Iacute},
++	{"Icircumflex", XK_Icircumflex},
++	{"Idiaeresis", XK_Idiaeresis},
++	{"ETH", XK_ETH},
++	{"Eth", XK_Eth},
++	{"Ntilde", XK_Ntilde},
++	{"Ograve", XK_Ograve},
++	{"Oacute", XK_Oacute},
++	{"Ocircumflex", XK_Ocircumflex},
++	{"Otilde", XK_Otilde},
++	{"Odiaeresis", XK_Odiaeresis},
++	{"multiply", XK_multiply},
++	{"Ooblique", XK_Ooblique},
++	{"Ugrave", XK_Ugrave},
++	{"Uacute", XK_Uacute},
++	{"Ucircumflex", XK_Ucircumflex},
++	{"Udiaeresis", XK_Udiaeresis},
++	{"Yacute", XK_Yacute},
++	{"THORN", XK_THORN},
++	{"Thorn", XK_Thorn},
++	{"ssharp", XK_ssharp},
++	{"agrave", XK_agrave},
++	{"aacute", XK_aacute},
++	{"acircumflex", XK_acircumflex},
++	{"atilde", XK_atilde},
++	{"adiaeresis", XK_adiaeresis},
++	{"aring", XK_aring},
++	{"ae", XK_ae},
++	{"ccedilla", XK_ccedilla},
++	{"egrave", XK_egrave},
++	{"eacute", XK_eacute},
++	{"ecircumflex", XK_ecircumflex},
++	{"ediaeresis", XK_ediaeresis},
++	{"igrave", XK_igrave},
++	{"iacute", XK_iacute},
++	{"icircumflex", XK_icircumflex},
++	{"idiaeresis", XK_idiaeresis},
++	{"eth", XK_eth},
++	{"ntilde", XK_ntilde},
++	{"ograve", XK_ograve},
++	{"oacute", XK_oacute},
++	{"ocircumflex", XK_ocircumflex},
++	{"otilde", XK_otilde},
++	{"odiaeresis", XK_odiaeresis},
++	{"division", XK_division},
++	{"oslash", XK_oslash},
++	{"ugrave", XK_ugrave},
++	{"uacute", XK_uacute},
++	{"ucircumflex", XK_ucircumflex},
++	{"udiaeresis", XK_udiaeresis},
++	{"yacute", XK_yacute},
++	{"thorn", XK_thorn},
++	{"ydiaeresis", XK_ydiaeresis},
++#endif /* XK_LATIN1 */
++#ifdef XK_LATIN2
++	{"Aogonek", XK_Aogonek},
++	{"breve", XK_breve},
++	{"Lstroke", XK_Lstroke},
++	{"Lcaron", XK_Lcaron},
++	{"Sacute", XK_Sacute},
++	{"Scaron", XK_Scaron},
++	{"Scedilla", XK_Scedilla},
++	{"Tcaron", XK_Tcaron},
++	{"Zacute", XK_Zacute},
++	{"Zcaron", XK_Zcaron},
++	{"Zabovedot", XK_Zabovedot},
++	{"aogonek", XK_aogonek},
++	{"ogonek", XK_ogonek},
++	{"lstroke", XK_lstroke},
++	{"lcaron", XK_lcaron},
++	{"sacute", XK_sacute},
++	{"caron", XK_caron},
++	{"scaron", XK_scaron},
++	{"scedilla", XK_scedilla},
++	{"tcaron", XK_tcaron},
++	{"zacute", XK_zacute},
++	{"doubleacute", XK_doubleacute},
++	{"zcaron", XK_zcaron},
++	{"zabovedot", XK_zabovedot},
++	{"Racute", XK_Racute},
++	{"Abreve", XK_Abreve},
++	{"Lacute", XK_Lacute},
++	{"Cacute", XK_Cacute},
++	{"Ccaron", XK_Ccaron},
++	{"Eogonek", XK_Eogonek},
++	{"Ecaron", XK_Ecaron},
++	{"Dcaron", XK_Dcaron},
++	{"Dstroke", XK_Dstroke},
++	{"Nacute", XK_Nacute},
++	{"Ncaron", XK_Ncaron},
++	{"Odoubleacute", XK_Odoubleacute},
++	{"Rcaron", XK_Rcaron},
++	{"Uring", XK_Uring},
++	{"Udoubleacute", XK_Udoubleacute},
++	{"Tcedilla", XK_Tcedilla},
++	{"racute", XK_racute},
++	{"abreve", XK_abreve},
++	{"lacute", XK_lacute},
++	{"cacute", XK_cacute},
++	{"ccaron", XK_ccaron},
++	{"eogonek", XK_eogonek},
++	{"ecaron", XK_ecaron},
++	{"dcaron", XK_dcaron},
++	{"dstroke", XK_dstroke},
++	{"nacute", XK_nacute},
++	{"ncaron", XK_ncaron},
++	{"odoubleacute", XK_odoubleacute},
++	{"udoubleacute", XK_udoubleacute},
++	{"rcaron", XK_rcaron},
++	{"uring", XK_uring},
++	{"tcedilla", XK_tcedilla},
++	{"abovedot", XK_abovedot},
++#endif /* XK_LATIN2 */
++#ifdef XK_LATIN3
++	{"Hstroke", XK_Hstroke},
++	{"Hcircumflex", XK_Hcircumflex},
++	{"Iabovedot", XK_Iabovedot},
++	{"Gbreve", XK_Gbreve},
++	{"Jcircumflex", XK_Jcircumflex},
++	{"hstroke", XK_hstroke},
++	{"hcircumflex", XK_hcircumflex},
++	{"idotless", XK_idotless},
++	{"gbreve", XK_gbreve},
++	{"jcircumflex", XK_jcircumflex},
++	{"Cabovedot", XK_Cabovedot},
++	{"Ccircumflex", XK_Ccircumflex},
++	{"Gabovedot", XK_Gabovedot},
++	{"Gcircumflex", XK_Gcircumflex},
++	{"Ubreve", XK_Ubreve},
++	{"Scircumflex", XK_Scircumflex},
++	{"cabovedot", XK_cabovedot},
++	{"ccircumflex", XK_ccircumflex},
++	{"gabovedot", XK_gabovedot},
++	{"gcircumflex", XK_gcircumflex},
++	{"ubreve", XK_ubreve},
++	{"scircumflex", XK_scircumflex},
++#endif /* XK_LATIN3 */
++#ifdef XK_LATIN4
++	{"kra", XK_kra},
++	{"kappa", XK_kappa},
++	{"Rcedilla", XK_Rcedilla},
++	{"Itilde", XK_Itilde},
++	{"Lcedilla", XK_Lcedilla},
++	{"Emacron", XK_Emacron},
++	{"Gcedilla", XK_Gcedilla},
++	{"Tslash", XK_Tslash},
++	{"rcedilla", XK_rcedilla},
++	{"itilde", XK_itilde},
++	{"lcedilla", XK_lcedilla},
++	{"emacron", XK_emacron},
++	{"gcedilla", XK_gcedilla},
++	{"tslash", XK_tslash},
++	{"ENG", XK_ENG},
++	{"eng", XK_eng},
++	{"Amacron", XK_Amacron},
++	{"Iogonek", XK_Iogonek},
++	{"Eabovedot", XK_Eabovedot},
++	{"Imacron", XK_Imacron},
++	{"Ncedilla", XK_Ncedilla},
++	{"Omacron", XK_Omacron},
++	{"Kcedilla", XK_Kcedilla},
++	{"Uogonek", XK_Uogonek},
++	{"Utilde", XK_Utilde},
++	{"Umacron", XK_Umacron},
++	{"amacron", XK_amacron},
++	{"iogonek", XK_iogonek},
++	{"eabovedot", XK_eabovedot},
++	{"imacron", XK_imacron},
++	{"ncedilla", XK_ncedilla},
++	{"omacron", XK_omacron},
++	{"kcedilla", XK_kcedilla},
++	{"uogonek", XK_uogonek},
++	{"utilde", XK_utilde},
++	{"umacron", XK_umacron},
++#endif /* XK_LATIN4 */
++#ifdef XK_KATAKANA
++	{"overline", XK_overline},
++	{"kana_fullstop", XK_kana_fullstop},
++	{"kana_openingbracket", XK_kana_openingbracket},
++	{"kana_closingbracket", XK_kana_closingbracket},
++	{"kana_comma", XK_kana_comma},
++	{"kana_conjunctive", XK_kana_conjunctive},
++	{"kana_middledot", XK_kana_middledot},
++	{"kana_WO", XK_kana_WO},
++	{"kana_a", XK_kana_a},
++	{"kana_i", XK_kana_i},
++	{"kana_u", XK_kana_u},
++	{"kana_e", XK_kana_e},
++	{"kana_o", XK_kana_o},
++	{"kana_ya", XK_kana_ya},
++	{"kana_yu", XK_kana_yu},
++	{"kana_yo", XK_kana_yo},
++	{"kana_tsu", XK_kana_tsu},
++	{"kana_tu", XK_kana_tu},
++	{"prolongedsound", XK_prolongedsound},
++	{"kana_A", XK_kana_A},
++	{"kana_I", XK_kana_I},
++	{"kana_U", XK_kana_U},
++	{"kana_E", XK_kana_E},
++	{"kana_O", XK_kana_O},
++	{"kana_KA", XK_kana_KA},
++	{"kana_KI", XK_kana_KI},
++	{"kana_KU", XK_kana_KU},
++	{"kana_KE", XK_kana_KE},
++	{"kana_KO", XK_kana_KO},
++	{"kana_SA", XK_kana_SA},
++	{"kana_SHI", XK_kana_SHI},
++	{"kana_SU", XK_kana_SU},
++	{"kana_SE", XK_kana_SE},
++	{"kana_SO", XK_kana_SO},
++	{"kana_TA", XK_kana_TA},
++	{"kana_CHI", XK_kana_CHI},
++	{"kana_TI", XK_kana_TI},
++	{"kana_TSU", XK_kana_TSU},
++	{"kana_TU", XK_kana_TU},
++	{"kana_TE", XK_kana_TE},
++	{"kana_TO", XK_kana_TO},
++	{"kana_NA", XK_kana_NA},
++	{"kana_NI", XK_kana_NI},
++	{"kana_NU", XK_kana_NU},
++	{"kana_NE", XK_kana_NE},
++	{"kana_NO", XK_kana_NO},
++	{"kana_HA", XK_kana_HA},
++	{"kana_HI", XK_kana_HI},
++	{"kana_FU", XK_kana_FU},
++	{"kana_HU", XK_kana_HU},
++	{"kana_HE", XK_kana_HE},
++	{"kana_HO", XK_kana_HO},
++	{"kana_MA", XK_kana_MA},
++	{"kana_MI", XK_kana_MI},
++	{"kana_MU", XK_kana_MU},
++	{"kana_ME", XK_kana_ME},
++	{"kana_MO", XK_kana_MO},
++	{"kana_YA", XK_kana_YA},
++	{"kana_YU", XK_kana_YU},
++	{"kana_YO", XK_kana_YO},
++	{"kana_RA", XK_kana_RA},
++	{"kana_RI", XK_kana_RI},
++	{"kana_RU", XK_kana_RU},
++	{"kana_RE", XK_kana_RE},
++	{"kana_RO", XK_kana_RO},
++	{"kana_WA", XK_kana_WA},
++	{"kana_N", XK_kana_N},
++	{"voicedsound", XK_voicedsound},
++	{"semivoicedsound", XK_semivoicedsound},
++	{"kana_switch", XK_kana_switch},
++#endif /* XK_KATAKANA */
++#ifdef XK_ARABIC
++	{"Arabic_comma", XK_Arabic_comma},
++	{"Arabic_semicolon", XK_Arabic_semicolon},
++	{"Arabic_question_mark", XK_Arabic_question_mark},
++	{"Arabic_hamza", XK_Arabic_hamza},
++	{"Arabic_maddaonalef", XK_Arabic_maddaonalef},
++	{"Arabic_hamzaonalef", XK_Arabic_hamzaonalef},
++	{"Arabic_hamzaonwaw", XK_Arabic_hamzaonwaw},
++	{"Arabic_hamzaunderalef", XK_Arabic_hamzaunderalef},
++	{"Arabic_hamzaonyeh", XK_Arabic_hamzaonyeh},
++	{"Arabic_alef", XK_Arabic_alef},
++	{"Arabic_beh", XK_Arabic_beh},
++	{"Arabic_tehmarbuta", XK_Arabic_tehmarbuta},
++	{"Arabic_teh", XK_Arabic_teh},
++	{"Arabic_theh", XK_Arabic_theh},
++	{"Arabic_jeem", XK_Arabic_jeem},
++	{"Arabic_hah", XK_Arabic_hah},
++	{"Arabic_khah", XK_Arabic_khah},
++	{"Arabic_dal", XK_Arabic_dal},
++	{"Arabic_thal", XK_Arabic_thal},
++	{"Arabic_ra", XK_Arabic_ra},
++	{"Arabic_zain", XK_Arabic_zain},
++	{"Arabic_seen", XK_Arabic_seen},
++	{"Arabic_sheen", XK_Arabic_sheen},
++	{"Arabic_sad", XK_Arabic_sad},
++	{"Arabic_dad", XK_Arabic_dad},
++	{"Arabic_tah", XK_Arabic_tah},
++	{"Arabic_zah", XK_Arabic_zah},
++	{"Arabic_ain", XK_Arabic_ain},
++	{"Arabic_ghain", XK_Arabic_ghain},
++	{"Arabic_tatweel", XK_Arabic_tatweel},
++	{"Arabic_feh", XK_Arabic_feh},
++	{"Arabic_qaf", XK_Arabic_qaf},
++	{"Arabic_kaf", XK_Arabic_kaf},
++	{"Arabic_lam", XK_Arabic_lam},
++	{"Arabic_meem", XK_Arabic_meem},
++	{"Arabic_noon", XK_Arabic_noon},
++	{"Arabic_ha", XK_Arabic_ha},
++	{"Arabic_heh", XK_Arabic_heh},
++	{"Arabic_waw", XK_Arabic_waw},
++	{"Arabic_alefmaksura", XK_Arabic_alefmaksura},
++	{"Arabic_yeh", XK_Arabic_yeh},
++	{"Arabic_fathatan", XK_Arabic_fathatan},
++	{"Arabic_dammatan", XK_Arabic_dammatan},
++	{"Arabic_kasratan", XK_Arabic_kasratan},
++	{"Arabic_fatha", XK_Arabic_fatha},
++	{"Arabic_damma", XK_Arabic_damma},
++	{"Arabic_kasra", XK_Arabic_kasra},
++	{"Arabic_shadda", XK_Arabic_shadda},
++	{"Arabic_sukun", XK_Arabic_sukun},
++	{"Arabic_switch", XK_Arabic_switch},
++#endif /* XK_ARABIC */
++#ifdef XK_CYRILLIC
++	{"Serbian_dje", XK_Serbian_dje},
++	{"Macedonia_gje", XK_Macedonia_gje},
++	{"Cyrillic_io", XK_Cyrillic_io},
++	{"Ukrainian_ie", XK_Ukrainian_ie},
++	{"Ukranian_je", XK_Ukranian_je},
++	{"Macedonia_dse", XK_Macedonia_dse},
++	{"Ukrainian_i", XK_Ukrainian_i},
++	{"Ukranian_i", XK_Ukranian_i},
++	{"Ukrainian_yi", XK_Ukrainian_yi},
++	{"Ukranian_yi", XK_Ukranian_yi},
++	{"Cyrillic_je", XK_Cyrillic_je},
++	{"Serbian_je", XK_Serbian_je},
++	{"Cyrillic_lje", XK_Cyrillic_lje},
++	{"Serbian_lje", XK_Serbian_lje},
++	{"Cyrillic_nje", XK_Cyrillic_nje},
++	{"Serbian_nje", XK_Serbian_nje},
++	{"Serbian_tshe", XK_Serbian_tshe},
++	{"Macedonia_kje", XK_Macedonia_kje},
++	{"Byelorussian_shortu", XK_Byelorussian_shortu},
++	{"Cyrillic_dzhe", XK_Cyrillic_dzhe},
++	{"Serbian_dze", XK_Serbian_dze},
++	{"numerosign", XK_numerosign},
++	{"Serbian_DJE", XK_Serbian_DJE},
++	{"Macedonia_GJE", XK_Macedonia_GJE},
++	{"Cyrillic_IO", XK_Cyrillic_IO},
++	{"Ukrainian_IE", XK_Ukrainian_IE},
++	{"Ukranian_JE", XK_Ukranian_JE},
++	{"Macedonia_DSE", XK_Macedonia_DSE},
++	{"Ukrainian_I", XK_Ukrainian_I},
++	{"Ukranian_I", XK_Ukranian_I},
++	{"Ukrainian_YI", XK_Ukrainian_YI},
++	{"Ukranian_YI", XK_Ukranian_YI},
++	{"Cyrillic_JE", XK_Cyrillic_JE},
++	{"Serbian_JE", XK_Serbian_JE},
++	{"Cyrillic_LJE", XK_Cyrillic_LJE},
++	{"Serbian_LJE", XK_Serbian_LJE},
++	{"Cyrillic_NJE", XK_Cyrillic_NJE},
++	{"Serbian_NJE", XK_Serbian_NJE},
++	{"Serbian_TSHE", XK_Serbian_TSHE},
++	{"Macedonia_KJE", XK_Macedonia_KJE},
++	{"Byelorussian_SHORTU", XK_Byelorussian_SHORTU},
++	{"Cyrillic_DZHE", XK_Cyrillic_DZHE},
++	{"Serbian_DZE", XK_Serbian_DZE},
++	{"Cyrillic_yu", XK_Cyrillic_yu},
++	{"Cyrillic_a", XK_Cyrillic_a},
++	{"Cyrillic_be", XK_Cyrillic_be},
++	{"Cyrillic_tse", XK_Cyrillic_tse},
++	{"Cyrillic_de", XK_Cyrillic_de},
++	{"Cyrillic_ie", XK_Cyrillic_ie},
++	{"Cyrillic_ef", XK_Cyrillic_ef},
++	{"Cyrillic_ghe", XK_Cyrillic_ghe},
++	{"Cyrillic_ha", XK_Cyrillic_ha},
++	{"Cyrillic_i", XK_Cyrillic_i},
++	{"Cyrillic_shorti", XK_Cyrillic_shorti},
++	{"Cyrillic_ka", XK_Cyrillic_ka},
++	{"Cyrillic_el", XK_Cyrillic_el},
++	{"Cyrillic_em", XK_Cyrillic_em},
++	{"Cyrillic_en", XK_Cyrillic_en},
++	{"Cyrillic_o", XK_Cyrillic_o},
++	{"Cyrillic_pe", XK_Cyrillic_pe},
++	{"Cyrillic_ya", XK_Cyrillic_ya},
++	{"Cyrillic_er", XK_Cyrillic_er},
++	{"Cyrillic_es", XK_Cyrillic_es},
++	{"Cyrillic_te", XK_Cyrillic_te},
++	{"Cyrillic_u", XK_Cyrillic_u},
++	{"Cyrillic_zhe", XK_Cyrillic_zhe},
++	{"Cyrillic_ve", XK_Cyrillic_ve},
++	{"Cyrillic_softsign", XK_Cyrillic_softsign},
++	{"Cyrillic_yeru", XK_Cyrillic_yeru},
++	{"Cyrillic_ze", XK_Cyrillic_ze},
++	{"Cyrillic_sha", XK_Cyrillic_sha},
++	{"Cyrillic_e", XK_Cyrillic_e},
++	{"Cyrillic_shcha", XK_Cyrillic_shcha},
++	{"Cyrillic_che", XK_Cyrillic_che},
++	{"Cyrillic_hardsign", XK_Cyrillic_hardsign},
++	{"Cyrillic_YU", XK_Cyrillic_YU},
++	{"Cyrillic_A", XK_Cyrillic_A},
++	{"Cyrillic_BE", XK_Cyrillic_BE},
++	{"Cyrillic_TSE", XK_Cyrillic_TSE},
++	{"Cyrillic_DE", XK_Cyrillic_DE},
++	{"Cyrillic_IE", XK_Cyrillic_IE},
++	{"Cyrillic_EF", XK_Cyrillic_EF},
++	{"Cyrillic_GHE", XK_Cyrillic_GHE},
++	{"Cyrillic_HA", XK_Cyrillic_HA},
++	{"Cyrillic_I", XK_Cyrillic_I},
++	{"Cyrillic_SHORTI", XK_Cyrillic_SHORTI},
++	{"Cyrillic_KA", XK_Cyrillic_KA},
++	{"Cyrillic_EL", XK_Cyrillic_EL},
++	{"Cyrillic_EM", XK_Cyrillic_EM},
++	{"Cyrillic_EN", XK_Cyrillic_EN},
++	{"Cyrillic_O", XK_Cyrillic_O},
++	{"Cyrillic_PE", XK_Cyrillic_PE},
++	{"Cyrillic_YA", XK_Cyrillic_YA},
++	{"Cyrillic_ER", XK_Cyrillic_ER},
++	{"Cyrillic_ES", XK_Cyrillic_ES},
++	{"Cyrillic_TE", XK_Cyrillic_TE},
++	{"Cyrillic_U", XK_Cyrillic_U},
++	{"Cyrillic_ZHE", XK_Cyrillic_ZHE},
++	{"Cyrillic_VE", XK_Cyrillic_VE},
++	{"Cyrillic_SOFTSIGN", XK_Cyrillic_SOFTSIGN},
++	{"Cyrillic_YERU", XK_Cyrillic_YERU},
++	{"Cyrillic_ZE", XK_Cyrillic_ZE},
++	{"Cyrillic_SHA", XK_Cyrillic_SHA},
++	{"Cyrillic_E", XK_Cyrillic_E},
++	{"Cyrillic_SHCHA", XK_Cyrillic_SHCHA},
++	{"Cyrillic_CHE", XK_Cyrillic_CHE},
++	{"Cyrillic_HARDSIGN", XK_Cyrillic_HARDSIGN},
++#endif /* XK_CYRILLIC */
++#ifdef XK_GREEK
++	{"Greek_ALPHAaccent", XK_Greek_ALPHAaccent},
++	{"Greek_EPSILONaccent", XK_Greek_EPSILONaccent},
++	{"Greek_ETAaccent", XK_Greek_ETAaccent},
++	{"Greek_IOTAaccent", XK_Greek_IOTAaccent},
++	{"Greek_IOTAdieresis", XK_Greek_IOTAdieresis},
++	{"Greek_OMICRONaccent", XK_Greek_OMICRONaccent},
++	{"Greek_UPSILONaccent", XK_Greek_UPSILONaccent},
++	{"Greek_UPSILONdieresis", XK_Greek_UPSILONdieresis},
++	{"Greek_OMEGAaccent", XK_Greek_OMEGAaccent},
++	{"Greek_accentdieresis", XK_Greek_accentdieresis},
++	{"Greek_horizbar", XK_Greek_horizbar},
++	{"Greek_alphaaccent", XK_Greek_alphaaccent},
++	{"Greek_epsilonaccent", XK_Greek_epsilonaccent},
++	{"Greek_etaaccent", XK_Greek_etaaccent},
++	{"Greek_iotaaccent", XK_Greek_iotaaccent},
++	{"Greek_iotadieresis", XK_Greek_iotadieresis},
++	{"Greek_iotaaccentdieresis", XK_Greek_iotaaccentdieresis},
++	{"Greek_omicronaccent", XK_Greek_omicronaccent},
++	{"Greek_upsilonaccent", XK_Greek_upsilonaccent},
++	{"Greek_upsilondieresis", XK_Greek_upsilondieresis},
++	{"Greek_upsilonaccentdieresis", XK_Greek_upsilonaccentdieresis},
++	{"Greek_omegaaccent", XK_Greek_omegaaccent},
++	{"Greek_ALPHA", XK_Greek_ALPHA},
++	{"Greek_BETA", XK_Greek_BETA},
++	{"Greek_GAMMA", XK_Greek_GAMMA},
++	{"Greek_DELTA", XK_Greek_DELTA},
++	{"Greek_EPSILON", XK_Greek_EPSILON},
++	{"Greek_ZETA", XK_Greek_ZETA},
++	{"Greek_ETA", XK_Greek_ETA},
++	{"Greek_THETA", XK_Greek_THETA},
++	{"Greek_IOTA", XK_Greek_IOTA},
++	{"Greek_KAPPA", XK_Greek_KAPPA},
++	{"Greek_LAMDA", XK_Greek_LAMDA},
++	{"Greek_LAMBDA", XK_Greek_LAMBDA},
++	{"Greek_MU", XK_Greek_MU},
++	{"Greek_NU", XK_Greek_NU},
++	{"Greek_XI", XK_Greek_XI},
++	{"Greek_OMICRON", XK_Greek_OMICRON},
++	{"Greek_PI", XK_Greek_PI},
++	{"Greek_RHO", XK_Greek_RHO},
++	{"Greek_SIGMA", XK_Greek_SIGMA},
++	{"Greek_TAU", XK_Greek_TAU},
++	{"Greek_UPSILON", XK_Greek_UPSILON},
++	{"Greek_PHI", XK_Greek_PHI},
++	{"Greek_CHI", XK_Greek_CHI},
++	{"Greek_PSI", XK_Greek_PSI},
++	{"Greek_OMEGA", XK_Greek_OMEGA},
++	{"Greek_alpha", XK_Greek_alpha},
++	{"Greek_beta", XK_Greek_beta},
++	{"Greek_gamma", XK_Greek_gamma},
++	{"Greek_delta", XK_Greek_delta},
++	{"Greek_epsilon", XK_Greek_epsilon},
++	{"Greek_zeta", XK_Greek_zeta},
++	{"Greek_eta", XK_Greek_eta},
++	{"Greek_theta", XK_Greek_theta},
++	{"Greek_iota", XK_Greek_iota},
++	{"Greek_kappa", XK_Greek_kappa},
++	{"Greek_lamda", XK_Greek_lamda},
++	{"Greek_lambda", XK_Greek_lambda},
++	{"Greek_mu", XK_Greek_mu},
++	{"Greek_nu", XK_Greek_nu},
++	{"Greek_xi", XK_Greek_xi},
++	{"Greek_omicron", XK_Greek_omicron},
++	{"Greek_pi", XK_Greek_pi},
++	{"Greek_rho", XK_Greek_rho},
++	{"Greek_sigma", XK_Greek_sigma},
++	{"Greek_finalsmallsigma", XK_Greek_finalsmallsigma},
++	{"Greek_tau", XK_Greek_tau},
++	{"Greek_upsilon", XK_Greek_upsilon},
++	{"Greek_phi", XK_Greek_phi},
++	{"Greek_chi", XK_Greek_chi},
++	{"Greek_psi", XK_Greek_psi},
++	{"Greek_omega", XK_Greek_omega},
++	{"Greek_switch", XK_Greek_switch},
++#endif /* XK_GREEK */
++#ifdef XK_TECHNICAL
++	{"leftradical", XK_leftradical},
++	{"topleftradical", XK_topleftradical},
++	{"horizconnector", XK_horizconnector},
++	{"topintegral", XK_topintegral},
++	{"botintegral", XK_botintegral},
++	{"vertconnector", XK_vertconnector},
++	{"topleftsqbracket", XK_topleftsqbracket},
++	{"botleftsqbracket", XK_botleftsqbracket},
++	{"toprightsqbracket", XK_toprightsqbracket},
++	{"botrightsqbracket", XK_botrightsqbracket},
++	{"topleftparens", XK_topleftparens},
++	{"botleftparens", XK_botleftparens},
++	{"toprightparens", XK_toprightparens},
++	{"botrightparens", XK_botrightparens},
++	{"leftmiddlecurlybrace", XK_leftmiddlecurlybrace},
++	{"rightmiddlecurlybrace", XK_rightmiddlecurlybrace},
++	{"topleftsummation", XK_topleftsummation},
++	{"botleftsummation", XK_botleftsummation},
++	{"topvertsummationconnector", XK_topvertsummationconnector},
++	{"botvertsummationconnector", XK_botvertsummationconnector},
++	{"toprightsummation", XK_toprightsummation},
++	{"botrightsummation", XK_botrightsummation},
++	{"rightmiddlesummation", XK_rightmiddlesummation},
++	{"lessthanequal", XK_lessthanequal},
++	{"notequal", XK_notequal},
++	{"greaterthanequal", XK_greaterthanequal},
++	{"integral", XK_integral},
++	{"therefore", XK_therefore},
++	{"variation", XK_variation},
++	{"infinity", XK_infinity},
++	{"nabla", XK_nabla},
++	{"approximate", XK_approximate},
++	{"similarequal", XK_similarequal},
++	{"ifonlyif", XK_ifonlyif},
++	{"implies", XK_implies},
++	{"identical", XK_identical},
++	{"radical", XK_radical},
++	{"includedin", XK_includedin},
++	{"includes", XK_includes},
++	{"intersection", XK_intersection},
++	{"union", XK_union},
++	{"logicaland", XK_logicaland},
++	{"logicalor", XK_logicalor},
++	{"partialderivative", XK_partialderivative},
++	{"function", XK_function},
++	{"leftarrow", XK_leftarrow},
++	{"uparrow", XK_uparrow},
++	{"rightarrow", XK_rightarrow},
++	{"downarrow", XK_downarrow},
++#endif /* XK_TECHNICAL */
++#ifdef XK_SPECIAL
++	{"blank", XK_blank},
++	{"soliddiamond", XK_soliddiamond},
++	{"checkerboard", XK_checkerboard},
++	{"ht", XK_ht},
++	{"ff", XK_ff},
++	{"cr", XK_cr},
++	{"lf", XK_lf},
++	{"nl", XK_nl},
++	{"vt", XK_vt},
++	{"lowrightcorner", XK_lowrightcorner},
++	{"uprightcorner", XK_uprightcorner},
++	{"upleftcorner", XK_upleftcorner},
++	{"lowleftcorner", XK_lowleftcorner},
++	{"crossinglines", XK_crossinglines},
++	{"horizlinescan1", XK_horizlinescan1},
++	{"horizlinescan3", XK_horizlinescan3},
++	{"horizlinescan5", XK_horizlinescan5},
++	{"horizlinescan7", XK_horizlinescan7},
++	{"horizlinescan9", XK_horizlinescan9},
++	{"leftt", XK_leftt},
++	{"rightt", XK_rightt},
++	{"bott", XK_bott},
++	{"topt", XK_topt},
++	{"vertbar", XK_vertbar},
++#endif /* XK_SPECIAL */
++#ifdef XK_PUBLISHING
++	{"emspace", XK_emspace},
++	{"enspace", XK_enspace},
++	{"em3space", XK_em3space},
++	{"em4space", XK_em4space},
++	{"digitspace", XK_digitspace},
++	{"punctspace", XK_punctspace},
++	{"thinspace", XK_thinspace},
++	{"hairspace", XK_hairspace},
++	{"emdash", XK_emdash},
++	{"endash", XK_endash},
++	{"signifblank", XK_signifblank},
++	{"ellipsis", XK_ellipsis},
++	{"doubbaselinedot", XK_doubbaselinedot},
++	{"onethird", XK_onethird},
++	{"twothirds", XK_twothirds},
++	{"onefifth", XK_onefifth},
++	{"twofifths", XK_twofifths},
++	{"threefifths", XK_threefifths},
++	{"fourfifths", XK_fourfifths},
++	{"onesixth", XK_onesixth},
++	{"fivesixths", XK_fivesixths},
++	{"careof", XK_careof},
++	{"figdash", XK_figdash},
++	{"leftanglebracket", XK_leftanglebracket},
++	{"decimalpoint", XK_decimalpoint},
++	{"rightanglebracket", XK_rightanglebracket},
++	{"marker", XK_marker},
++	{"oneeighth", XK_oneeighth},
++	{"threeeighths", XK_threeeighths},
++	{"fiveeighths", XK_fiveeighths},
++	{"seveneighths", XK_seveneighths},
++	{"trademark", XK_trademark},
++	{"signaturemark", XK_signaturemark},
++	{"trademarkincircle", XK_trademarkincircle},
++	{"leftopentriangle", XK_leftopentriangle},
++	{"rightopentriangle", XK_rightopentriangle},
++	{"emopencircle", XK_emopencircle},
++	{"emopenrectangle", XK_emopenrectangle},
++	{"leftsinglequotemark", XK_leftsinglequotemark},
++	{"rightsinglequotemark", XK_rightsinglequotemark},
++	{"leftdoublequotemark", XK_leftdoublequotemark},
++	{"rightdoublequotemark", XK_rightdoublequotemark},
++	{"prescription", XK_prescription},
++	{"minutes", XK_minutes},
++	{"seconds", XK_seconds},
++	{"latincross", XK_latincross},
++	{"hexagram", XK_hexagram},
++	{"filledrectbullet", XK_filledrectbullet},
++	{"filledlefttribullet", XK_filledlefttribullet},
++	{"filledrighttribullet", XK_filledrighttribullet},
++	{"emfilledcircle", XK_emfilledcircle},
++	{"emfilledrect", XK_emfilledrect},
++	{"enopencircbullet", XK_enopencircbullet},
++	{"enopensquarebullet", XK_enopensquarebullet},
++	{"openrectbullet", XK_openrectbullet},
++	{"opentribulletup", XK_opentribulletup},
++	{"opentribulletdown", XK_opentribulletdown},
++	{"openstar", XK_openstar},
++	{"enfilledcircbullet", XK_enfilledcircbullet},
++	{"enfilledsqbullet", XK_enfilledsqbullet},
++	{"filledtribulletup", XK_filledtribulletup},
++	{"filledtribulletdown", XK_filledtribulletdown},
++	{"leftpointer", XK_leftpointer},
++	{"rightpointer", XK_rightpointer},
++	{"club", XK_club},
++	{"diamond", XK_diamond},
++	{"heart", XK_heart},
++	{"maltesecross", XK_maltesecross},
++	{"dagger", XK_dagger},
++	{"doubledagger", XK_doubledagger},
++	{"checkmark", XK_checkmark},
++	{"ballotcross", XK_ballotcross},
++	{"musicalsharp", XK_musicalsharp},
++	{"musicalflat", XK_musicalflat},
++	{"malesymbol", XK_malesymbol},
++	{"femalesymbol", XK_femalesymbol},
++	{"telephone", XK_telephone},
++	{"telephonerecorder", XK_telephonerecorder},
++	{"phonographcopyright", XK_phonographcopyright},
++	{"caret", XK_caret},
++	{"singlelowquotemark", XK_singlelowquotemark},
++	{"doublelowquotemark", XK_doublelowquotemark},
++	{"cursor", XK_cursor},
++#endif /* XK_PUBLISHING */
++#ifdef XK_APL
++	{"leftcaret", XK_leftcaret},
++	{"rightcaret", XK_rightcaret},
++	{"downcaret", XK_downcaret},
++	{"upcaret", XK_upcaret},
++	{"overbar", XK_overbar},
++	{"downtack", XK_downtack},
++	{"upshoe", XK_upshoe},
++	{"downstile", XK_downstile},
++	{"underbar", XK_underbar},
++	{"jot", XK_jot},
++	{"quad", XK_quad},
++	{"uptack", XK_uptack},
++	{"circle", XK_circle},
++	{"upstile", XK_upstile},
++	{"downshoe", XK_downshoe},
++	{"rightshoe", XK_rightshoe},
++	{"leftshoe", XK_leftshoe},
++	{"lefttack", XK_lefttack},
++	{"righttack", XK_righttack},
++#endif /* XK_APL */
++#ifdef XK_HEBREW
++	{"hebrew_doublelowline", XK_hebrew_doublelowline},
++	{"hebrew_aleph", XK_hebrew_aleph},
++	{"hebrew_bet", XK_hebrew_bet},
++	{"hebrew_beth", XK_hebrew_beth},
++	{"hebrew_gimel", XK_hebrew_gimel},
++	{"hebrew_gimmel", XK_hebrew_gimmel},
++	{"hebrew_dalet", XK_hebrew_dalet},
++	{"hebrew_daleth", XK_hebrew_daleth},
++	{"hebrew_he", XK_hebrew_he},
++	{"hebrew_waw", XK_hebrew_waw},
++	{"hebrew_zain", XK_hebrew_zain},
++	{"hebrew_zayin", XK_hebrew_zayin},
++	{"hebrew_chet", XK_hebrew_chet},
++	{"hebrew_het", XK_hebrew_het},
++	{"hebrew_tet", XK_hebrew_tet},
++	{"hebrew_teth", XK_hebrew_teth},
++	{"hebrew_yod", XK_hebrew_yod},
++	{"hebrew_finalkaph", XK_hebrew_finalkaph},
++	{"hebrew_kaph", XK_hebrew_kaph},
++	{"hebrew_lamed", XK_hebrew_lamed},
++	{"hebrew_finalmem", XK_hebrew_finalmem},
++	{"hebrew_mem", XK_hebrew_mem},
++	{"hebrew_finalnun", XK_hebrew_finalnun},
++	{"hebrew_nun", XK_hebrew_nun},
++	{"hebrew_samech", XK_hebrew_samech},
++	{"hebrew_samekh", XK_hebrew_samekh},
++	{"hebrew_ayin", XK_hebrew_ayin},
++	{"hebrew_finalpe", XK_hebrew_finalpe},
++	{"hebrew_pe", XK_hebrew_pe},
++	{"hebrew_finalzade", XK_hebrew_finalzade},
++	{"hebrew_finalzadi", XK_hebrew_finalzadi},
++	{"hebrew_zade", XK_hebrew_zade},
++	{"hebrew_zadi", XK_hebrew_zadi},
++	{"hebrew_qoph", XK_hebrew_qoph},
++	{"hebrew_kuf", XK_hebrew_kuf},
++	{"hebrew_resh", XK_hebrew_resh},
++	{"hebrew_shin", XK_hebrew_shin},
++	{"hebrew_taw", XK_hebrew_taw},
++	{"hebrew_taf", XK_hebrew_taf},
++	{"Hebrew_switch", XK_Hebrew_switch},
++#endif /* XK_HEBREW */
++#ifdef XK_THAI
++	{"Thai_kokai", XK_Thai_kokai},
++	{"Thai_khokhai", XK_Thai_khokhai},
++	{"Thai_khokhuat", XK_Thai_khokhuat},
++	{"Thai_khokhwai", XK_Thai_khokhwai},
++	{"Thai_khokhon", XK_Thai_khokhon},
++	{"Thai_khorakhang", XK_Thai_khorakhang},
++	{"Thai_ngongu", XK_Thai_ngongu},
++	{"Thai_chochan", XK_Thai_chochan},
++	{"Thai_choching", XK_Thai_choching},
++	{"Thai_chochang", XK_Thai_chochang},
++	{"Thai_soso", XK_Thai_soso},
++	{"Thai_chochoe", XK_Thai_chochoe},
++	{"Thai_yoying", XK_Thai_yoying},
++	{"Thai_dochada", XK_Thai_dochada},
++	{"Thai_topatak", XK_Thai_topatak},
++	{"Thai_thothan", XK_Thai_thothan},
++	{"Thai_thonangmontho", XK_Thai_thonangmontho},
++	{"Thai_thophuthao", XK_Thai_thophuthao},
++	{"Thai_nonen", XK_Thai_nonen},
++	{"Thai_dodek", XK_Thai_dodek},
++	{"Thai_totao", XK_Thai_totao},
++	{"Thai_thothung", XK_Thai_thothung},
++	{"Thai_thothahan", XK_Thai_thothahan},
++	{"Thai_thothong", XK_Thai_thothong},
++	{"Thai_nonu", XK_Thai_nonu},
++	{"Thai_bobaimai", XK_Thai_bobaimai},
++	{"Thai_popla", XK_Thai_popla},
++	{"Thai_phophung", XK_Thai_phophung},
++	{"Thai_fofa", XK_Thai_fofa},
++	{"Thai_phophan", XK_Thai_phophan},
++	{"Thai_fofan", XK_Thai_fofan},
++	{"Thai_phosamphao", XK_Thai_phosamphao},
++	{"Thai_moma", XK_Thai_moma},
++	{"Thai_yoyak", XK_Thai_yoyak},
++	{"Thai_rorua", XK_Thai_rorua},
++	{"Thai_ru", XK_Thai_ru},
++	{"Thai_loling", XK_Thai_loling},
++	{"Thai_lu", XK_Thai_lu},
++	{"Thai_wowaen", XK_Thai_wowaen},
++	{"Thai_sosala", XK_Thai_sosala},
++	{"Thai_sorusi", XK_Thai_sorusi},
++	{"Thai_sosua", XK_Thai_sosua},
++	{"Thai_hohip", XK_Thai_hohip},
++	{"Thai_lochula", XK_Thai_lochula},
++	{"Thai_oang", XK_Thai_oang},
++	{"Thai_honokhuk", XK_Thai_honokhuk},
++	{"Thai_paiyannoi", XK_Thai_paiyannoi},
++	{"Thai_saraa", XK_Thai_saraa},
++	{"Thai_maihanakat", XK_Thai_maihanakat},
++	{"Thai_saraaa", XK_Thai_saraaa},
++	{"Thai_saraam", XK_Thai_saraam},
++	{"Thai_sarai", XK_Thai_sarai},
++	{"Thai_saraii", XK_Thai_saraii},
++	{"Thai_saraue", XK_Thai_saraue},
++	{"Thai_sarauee", XK_Thai_sarauee},
++	{"Thai_sarau", XK_Thai_sarau},
++	{"Thai_sarauu", XK_Thai_sarauu},
++	{"Thai_phinthu", XK_Thai_phinthu},
++	{"Thai_maihanakat_maitho", XK_Thai_maihanakat_maitho},
++	{"Thai_baht", XK_Thai_baht},
++	{"Thai_sarae", XK_Thai_sarae},
++	{"Thai_saraae", XK_Thai_saraae},
++	{"Thai_sarao", XK_Thai_sarao},
++	{"Thai_saraaimaimuan", XK_Thai_saraaimaimuan},
++	{"Thai_saraaimaimalai", XK_Thai_saraaimaimalai},
++	{"Thai_lakkhangyao", XK_Thai_lakkhangyao},
++	{"Thai_maiyamok", XK_Thai_maiyamok},
++	{"Thai_maitaikhu", XK_Thai_maitaikhu},
++	{"Thai_maiek", XK_Thai_maiek},
++	{"Thai_maitho", XK_Thai_maitho},
++	{"Thai_maitri", XK_Thai_maitri},
++	{"Thai_maichattawa", XK_Thai_maichattawa},
++	{"Thai_thanthakhat", XK_Thai_thanthakhat},
++	{"Thai_nikhahit", XK_Thai_nikhahit},
++	{"Thai_leksun", XK_Thai_leksun},
++	{"Thai_leknung", XK_Thai_leknung},
++	{"Thai_leksong", XK_Thai_leksong},
++	{"Thai_leksam", XK_Thai_leksam},
++	{"Thai_leksi", XK_Thai_leksi},
++	{"Thai_lekha", XK_Thai_lekha},
++	{"Thai_lekhok", XK_Thai_lekhok},
++	{"Thai_lekchet", XK_Thai_lekchet},
++	{"Thai_lekpaet", XK_Thai_lekpaet},
++	{"Thai_lekkao", XK_Thai_lekkao},
++#endif /* XK_THAI */
++#ifdef XK_KOREAN
++	{"Hangul", XK_Hangul},
++	{"Hangul_Start", XK_Hangul_Start},
++	{"Hangul_End", XK_Hangul_End},
++	{"Hangul_Hanja", XK_Hangul_Hanja},
++	{"Hangul_Jamo", XK_Hangul_Jamo},
++	{"Hangul_Romaja", XK_Hangul_Romaja},
++	{"Hangul_Codeinput", XK_Hangul_Codeinput},
++	{"Hangul_Jeonja", XK_Hangul_Jeonja},
++	{"Hangul_Banja", XK_Hangul_Banja},
++	{"Hangul_PreHanja", XK_Hangul_PreHanja},
++	{"Hangul_PostHanja", XK_Hangul_PostHanja},
++	{"Hangul_SingleCandidate", XK_Hangul_SingleCandidate},
++	{"Hangul_MultipleCandidate", XK_Hangul_MultipleCandidate},
++	{"Hangul_PreviousCandidate", XK_Hangul_PreviousCandidate},
++	{"Hangul_Special", XK_Hangul_Special},
++	{"Hangul_switch", XK_Hangul_switch},
++	{"Hangul_Kiyeog", XK_Hangul_Kiyeog},
++	{"Hangul_SsangKiyeog", XK_Hangul_SsangKiyeog},
++	{"Hangul_KiyeogSios", XK_Hangul_KiyeogSios},
++	{"Hangul_Nieun", XK_Hangul_Nieun},
++	{"Hangul_NieunJieuj", XK_Hangul_NieunJieuj},
++	{"Hangul_NieunHieuh", XK_Hangul_NieunHieuh},
++	{"Hangul_Dikeud", XK_Hangul_Dikeud},
++	{"Hangul_SsangDikeud", XK_Hangul_SsangDikeud},
++	{"Hangul_Rieul", XK_Hangul_Rieul},
++	{"Hangul_RieulKiyeog", XK_Hangul_RieulKiyeog},
++	{"Hangul_RieulMieum", XK_Hangul_RieulMieum},
++	{"Hangul_RieulPieub", XK_Hangul_RieulPieub},
++	{"Hangul_RieulSios", XK_Hangul_RieulSios},
++	{"Hangul_RieulTieut", XK_Hangul_RieulTieut},
++	{"Hangul_RieulPhieuf", XK_Hangul_RieulPhieuf},
++	{"Hangul_RieulHieuh", XK_Hangul_RieulHieuh},
++	{"Hangul_Mieum", XK_Hangul_Mieum},
++	{"Hangul_Pieub", XK_Hangul_Pieub},
++	{"Hangul_SsangPieub", XK_Hangul_SsangPieub},
++	{"Hangul_PieubSios", XK_Hangul_PieubSios},
++	{"Hangul_Sios", XK_Hangul_Sios},
++	{"Hangul_SsangSios", XK_Hangul_SsangSios},
++	{"Hangul_Ieung", XK_Hangul_Ieung},
++	{"Hangul_Jieuj", XK_Hangul_Jieuj},
++	{"Hangul_SsangJieuj", XK_Hangul_SsangJieuj},
++	{"Hangul_Cieuc", XK_Hangul_Cieuc},
++	{"Hangul_Khieuq", XK_Hangul_Khieuq},
++	{"Hangul_Tieut", XK_Hangul_Tieut},
++	{"Hangul_Phieuf", XK_Hangul_Phieuf},
++	{"Hangul_Hieuh", XK_Hangul_Hieuh},
++	{"Hangul_A", XK_Hangul_A},
++	{"Hangul_AE", XK_Hangul_AE},
++	{"Hangul_YA", XK_Hangul_YA},
++	{"Hangul_YAE", XK_Hangul_YAE},
++	{"Hangul_EO", XK_Hangul_EO},
++	{"Hangul_E", XK_Hangul_E},
++	{"Hangul_YEO", XK_Hangul_YEO},
++	{"Hangul_YE", XK_Hangul_YE},
++	{"Hangul_O", XK_Hangul_O},
++	{"Hangul_WA", XK_Hangul_WA},
++	{"Hangul_WAE", XK_Hangul_WAE},
++	{"Hangul_OE", XK_Hangul_OE},
++	{"Hangul_YO", XK_Hangul_YO},
++	{"Hangul_U", XK_Hangul_U},
++	{"Hangul_WEO", XK_Hangul_WEO},
++	{"Hangul_WE", XK_Hangul_WE},
++	{"Hangul_WI", XK_Hangul_WI},
++	{"Hangul_YU", XK_Hangul_YU},
++	{"Hangul_EU", XK_Hangul_EU},
++	{"Hangul_YI", XK_Hangul_YI},
++	{"Hangul_I", XK_Hangul_I},
++	{"Hangul_J_Kiyeog", XK_Hangul_J_Kiyeog},
++	{"Hangul_J_SsangKiyeog", XK_Hangul_J_SsangKiyeog},
++	{"Hangul_J_KiyeogSios", XK_Hangul_J_KiyeogSios},
++	{"Hangul_J_Nieun", XK_Hangul_J_Nieun},
++	{"Hangul_J_NieunJieuj", XK_Hangul_J_NieunJieuj},
++	{"Hangul_J_NieunHieuh", XK_Hangul_J_NieunHieuh},
++	{"Hangul_J_Dikeud", XK_Hangul_J_Dikeud},
++	{"Hangul_J_Rieul", XK_Hangul_J_Rieul},
++	{"Hangul_J_RieulKiyeog", XK_Hangul_J_RieulKiyeog},
++	{"Hangul_J_RieulMieum", XK_Hangul_J_RieulMieum},
++	{"Hangul_J_RieulPieub", XK_Hangul_J_RieulPieub},
++	{"Hangul_J_RieulSios", XK_Hangul_J_RieulSios},
++	{"Hangul_J_RieulTieut", XK_Hangul_J_RieulTieut},
++	{"Hangul_J_RieulPhieuf", XK_Hangul_J_RieulPhieuf},
++	{"Hangul_J_RieulHieuh", XK_Hangul_J_RieulHieuh},
++	{"Hangul_J_Mieum", XK_Hangul_J_Mieum},
++	{"Hangul_J_Pieub", XK_Hangul_J_Pieub},
++	{"Hangul_J_PieubSios", XK_Hangul_J_PieubSios},
++	{"Hangul_J_Sios", XK_Hangul_J_Sios},
++	{"Hangul_J_SsangSios", XK_Hangul_J_SsangSios},
++	{"Hangul_J_Ieung", XK_Hangul_J_Ieung},
++	{"Hangul_J_Jieuj", XK_Hangul_J_Jieuj},
++	{"Hangul_J_Cieuc", XK_Hangul_J_Cieuc},
++	{"Hangul_J_Khieuq", XK_Hangul_J_Khieuq},
++	{"Hangul_J_Tieut", XK_Hangul_J_Tieut},
++	{"Hangul_J_Phieuf", XK_Hangul_J_Phieuf},
++	{"Hangul_J_Hieuh", XK_Hangul_J_Hieuh},
++	{"Hangul_RieulYeorinHieuh", XK_Hangul_RieulYeorinHieuh},
++	{"Hangul_SunkyeongeumMieum", XK_Hangul_SunkyeongeumMieum},
++	{"Hangul_SunkyeongeumPieub", XK_Hangul_SunkyeongeumPieub},
++	{"Hangul_PanSios", XK_Hangul_PanSios},
++	{"Hangul_KkogjiDalrinIeung", XK_Hangul_KkogjiDalrinIeung},
++	{"Hangul_SunkyeongeumPhieuf", XK_Hangul_SunkyeongeumPhieuf},
++	{"Hangul_YeorinHieuh", XK_Hangul_YeorinHieuh},
++	{"Hangul_AraeA", XK_Hangul_AraeA},
++	{"Hangul_AraeAE", XK_Hangul_AraeAE},
++	{"Hangul_J_PanSios", XK_Hangul_J_PanSios},
++	{"Hangul_J_KkogjiDalrinIeung", XK_Hangul_J_KkogjiDalrinIeung},
++	{"Hangul_J_YeorinHieuh", XK_Hangul_J_YeorinHieuh},
++	{"Korean_Won", XK_Korean_Won},
++#endif /* XK_KOREAN */
++	{"EuroSign", XK_EuroSign},
++#endif
++	{"NoSymbol", NoSymbol}
++};
++
++KeySym
++XStringToKeysym(const char *str)
++{
++	int i;
++	for (i = 0; StringToKeysym[i].keysym != NoSymbol
++	     && strcmp(StringToKeysym[i].string, str); i++);
++	return StringToKeysym[i].keysym;
++}
++
++const char *
++XKeysymToString(KeySym keysym)
++{
++	int i;
++	for (i = 0; StringToKeysym[i].keysym != NoSymbol
++	     && StringToKeysym[i].keysym != keysym; i++);
++	return StringToKeysym[i].string;
++}
++
++void
++XDisplayKeycodes(Display * display, int *min_keycode, int *max_keycode)
++{
++	/* VNC keycodes are non-existant */
++	*min_keycode = 0xffff;
++	*max_keycode = 0;
++}
+diff -urN rdesktop-1.5.0.org/vnc/x11stubs.h rdesktop-1.5.0/vnc/x11stubs.h
+--- rdesktop-1.5.0.org/vnc/x11stubs.h	1970-01-01 01:00:00.000000000 +0100
++++ rdesktop-1.5.0/vnc/x11stubs.h	2004-04-10 11:34:52.000000000 +0200
+@@ -0,0 +1,33 @@
++#ifndef NOXKEYMAP_H
++#define NOXKEYMAP_H
++
++/* Fake a few X11 calls */
++
++#define XK_MISCELLANY
++#include <rfb/rfb.h>
++#include <rfb/keysym.h>
++
++#define NoSymbol 0L
++#define ShiftMask               (1<<0)
++#define LockMask                (1<<1)
++#define ControlMask             (1<<2)
++#define Mod1Mask                (1<<3)
++#define Mod2Mask                (1<<4)
++#define Mod3Mask                (1<<5)
++#define Mod4Mask                (1<<6)
++#define Mod5Mask                (1<<7)
++#define Button1                 1
++#define Button2                 2
++#define Button3                 3
++#define Button4                 4
++#define Button5                 5
++
++typedef int Display;
++typedef int Window;
++typedef rfbKeySym KeySym;
++
++KeySym XStringToKeysym(const char *str);
++const char *XKeysymToString(KeySym keysym);
++void XDisplayKeycodes(Display * display, int *min_keycode, int *max_keycode);
++
++#endif
