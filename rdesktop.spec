@@ -1,7 +1,7 @@
 %bcond_with	vnc
 #
 Summary:	RDP client for accessing Windows NT Terminal Server
-Summary(pl):	Klient RDP umo¿liwiaj±cy dostêp do Terminal Serwera WinNT
+Summary(pl.UTF-8):   Klient RDP umoÅ¼liwiajÄ…cy dostÄ™p do Terminal Serwera WinNT
 Name:		rdesktop
 Version:	1.5.0
 Release:	1
@@ -23,11 +23,11 @@ Terminal Server, capable of natively speaking its Remote Desktop
 Protocol (RDP) in order to present the user's NT desktop. Unlike
 Citrix ICA, no server extensions are required.
 
-%description -l pl
-rdesktop jest klientem natywnie u¿ywaj±cym protoko³u RDP (Remote
-Desktop Protocol) umo¿liwiaj±cego dostêp do Terminal Servera Windows
-NT lub Windows 2000. W przeciwieñstwie do rozwi±zañ typu Citrix nie s±
-wymagane ¿adne rozszerzenia po stronie serwera.
+%description -l pl.UTF-8
+rdesktop jest klientem natywnie uÅ¼ywajÄ…cym protokoÅ‚u RDP (Remote
+Desktop Protocol) umoÅ¼liwiajÄ…cego dostÄ™p do Terminal Servera Windows
+NT lub Windows 2000. W przeciwieÅ„stwie do rozwiÄ…zaÅ„ typu Citrix nie sÄ…
+wymagane Å¼adne rozszerzenia po stronie serwera.
 
 %prep
 %setup -q
