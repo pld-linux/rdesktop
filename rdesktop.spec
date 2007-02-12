@@ -1,7 +1,7 @@
 %bcond_with	vnc
 #
 Summary:	RDP client for accessing Windows NT Terminal Server
-Summary(pl.UTF-8):   Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
+Summary(pl.UTF-8):	Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
 Name:		rdesktop
 Version:	1.5.0
 Release:	1
