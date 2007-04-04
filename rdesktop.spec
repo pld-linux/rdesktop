@@ -1,4 +1,6 @@
-%bcond_with	vnc
+#
+# Conditional build:
+%bcond_with	vnc	# build rdp2vnc
 #
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl.UTF-8):	Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
@@ -11,10 +13,10 @@ Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	433546f60fc0f201e99307ba188369ed
 Patch0:		%{name}-vnc.patch
 URL:		http://www.rdesktop.org/
-BuildRequires:	openssl-devel >= 0.9.7d
-BuildRequires:	xorg-lib-libX11-devel
 BuildRequires:	libao-devel
 %{?with_vnc:BuildRequires:	libvncserver-devel}
+BuildRequires:	openssl-devel >= 0.9.7d
+BuildRequires:	xorg-lib-libX11-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
@@ -55,5 +57,5 @@ rm -rf $RPM_BUILD_ROOT
 %defattr(644,root,root,755)
 %doc doc/
 %attr(755,root,root) %{_bindir}/rdesktop
-%attr(755,root,root) %{_datadir}/rdesktop
-%{_mandir}/man?/*
+%{_datadir}/rdesktop
+%{_mandir}/man1/rdesktop.1*
