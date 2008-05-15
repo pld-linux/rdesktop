@@ -5,17 +5,18 @@
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl.UTF-8):	Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
 Name:		rdesktop
-Version:	1.5.0
+Version:	1.6.0
 Release:	1
 License:	GPL
 Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
-# Source0-md5:	433546f60fc0f201e99307ba188369ed
+# Source0-md5:	c6fcbed7f0ad7e60ac5fcb2d324d8b16
 Patch0:		%{name}-vnc.patch
 URL:		http://www.rdesktop.org/
-BuildRequires:	libao-devel
+BuildRequires:	alsa-lib-devel
 %{?with_vnc:BuildRequires:	libvncserver-devel}
 BuildRequires:	openssl-devel >= 0.9.7d
+BuildRequires:	pcsc-lite-devel
 BuildRequires:	xorg-lib-libX11-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
@@ -38,8 +39,8 @@ wymagane żadne rozszerzenia po stronie serwera.
 %build
 %configure \
 	%{?with_vnc:--with-libvncserver} \
-	--with-libao \
-	--with-sound=libao \
+	--enable-smartcard \
+	--with-sound=alsa \
 	--with-ipv6
 
 %{__make}
