@@ -15,6 +15,7 @@ Patch0:		%{name}-vnc.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	XFree86-devel
 BuildRequires:	alsa-lib-devel
+BuildRequires:	automake
 %{?with_vnc:BuildRequires:	libvncserver-devel}
 BuildRequires:	openssl-devel >= 0.9.7d
 BuildRequires:	pcsc-lite-devel
@@ -37,6 +38,7 @@ wymagane żadne rozszerzenia po stronie serwera.
 %patch0 -p1
 
 %build
+cp -f /usr/share/automake/config.sub .
 %configure \
 	%{?with_vnc:--with-libvncserver} \
 	--enable-smartcard \
