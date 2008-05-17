@@ -13,11 +13,11 @@ Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	c6fcbed7f0ad7e60ac5fcb2d324d8b16
 Patch0:		%{name}-vnc.patch
 URL:		http://www.rdesktop.org/
+BuildRequires:	XFree86-devel
 BuildRequires:	alsa-lib-devel
 %{?with_vnc:BuildRequires:	libvncserver-devel}
 BuildRequires:	openssl-devel >= 0.9.7d
 BuildRequires:	pcsc-lite-devel
-BuildRequires:	xorg-lib-libX11-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
