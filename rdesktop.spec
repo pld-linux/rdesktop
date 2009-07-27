@@ -6,18 +6,20 @@ Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl.UTF-8):	Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
 Name:		rdesktop
 Version:	1.6.0
-Release:	2
+Release:	3
 License:	GPL
 Group:		X11/Applications/Networking
 Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	c6fcbed7f0ad7e60ac5fcb2d324d8b16
 Patch0:		%{name}-vnc.patch
+Patch1:		%{name}-xinerama.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	alsa-lib-devel
 %{?with_vnc:BuildRequires:	libvncserver-devel}
 BuildRequires:	openssl-devel >= 0.9.7d
 BuildRequires:	pcsc-lite-devel
 BuildRequires:	xorg-lib-libX11-devel
+BuildRequires:	xorg-proto-xineramaproto-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
@@ -35,8 +37,11 @@ wymagane żadne rozszerzenia po stronie serwera.
 %prep
 %setup -q
 %patch0 -p1
+%patch1 -p0
 
 %build
+%{__aclocal}
+%{__autoconf}
 %configure \
 	%{?with_vnc:--with-libvncserver} \
 	--enable-smartcard \
