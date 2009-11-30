@@ -15,9 +15,12 @@ Patch0:		%{name}-vnc.patch
 Patch1:		%{name}-xinerama.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	alsa-lib-devel
+BuildRequires:	autoconf
+BuildRequires:	automake
 %{?with_vnc:BuildRequires:	libvncserver-devel}
 BuildRequires:	openssl-devel >= 0.9.7d
 BuildRequires:	pcsc-lite-devel
+BuildRequires:	pkgconfig
 BuildRequires:	xorg-lib-libX11-devel
 BuildRequires:	xorg-proto-xineramaproto-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
