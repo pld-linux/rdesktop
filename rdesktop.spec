@@ -5,7 +5,7 @@ Version:	1.7.1
 Release:	1
 License:	GPL
 Group:		X11/Applications/Networking
-Source0:	http://dl.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
+Source0:	http://downloads.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	c4b39115951c4a6d74f511c99b18fcf9
 Patch0:		%{name}-xinerama.patch
 URL:		http://www.rdesktop.org/
