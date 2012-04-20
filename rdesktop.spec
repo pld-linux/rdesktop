@@ -3,20 +3,22 @@ Summary(pl.UTF-8):	Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
 Name:		rdesktop
 Version:	1.7.1
 Release:	1
-License:	GPL
+License:	GPL v3+
 Group:		X11/Applications/Networking
 Source0:	http://downloads.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	c4b39115951c4a6d74f511c99b18fcf9
 Patch0:		%{name}-xinerama.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	alsa-lib-devel
-BuildRequires:	autoconf
+BuildRequires:	autoconf >= 2.50
 BuildRequires:	automake
+BuildRequires:	libsamplerate-devel
 BuildRequires:	openssl-devel >= 0.9.7d
 BuildRequires:	pcsc-lite-devel
 BuildRequires:	pkgconfig
 BuildRequires:	xorg-lib-libX11-devel
 BuildRequires:	xorg-lib-libXinerama-devel
+BuildRequires:	xorg-lib-libXrandr-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
@@ -40,8 +42,9 @@ wymagane żadne rozszerzenia po stronie serwera.
 %{__autoconf}
 %configure \
 	--enable-smartcard \
-	--with-sound=alsa \
-	--with-ipv6
+	--with-ipv6 \
+	--with-sound=alsa
+# note: --with-libvncserver requires vnc/ code, which don't exist
 
 %{__make}
 
@@ -56,7 +59,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc doc/
+%doc README doc/
 %attr(755,root,root) %{_bindir}/rdesktop
 %{_datadir}/rdesktop
 %{_mandir}/man1/rdesktop.1*
