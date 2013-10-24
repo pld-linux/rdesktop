@@ -7,6 +7,7 @@ License:	GPL v3+
 Group:		X11/Applications/Networking
 Source0:	http://downloads.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	203d662ac20b22250bbbd525a9f29f3a
+Patch100:	%{name}-svn.patch
 Patch0:		%{name}-xinerama.patch
 Patch1:		%{name}-heimdal.patch
 URL:		http://www.rdesktop.org/
@@ -37,6 +38,7 @@ wymagane żadne rozszerzenia po stronie serwera.
 
 %prep
 %setup -q
+%patch100 -p0
 %patch0 -p1
 %patch1 -p1
 
