@@ -1,0 +1,21 @@
+diff -urN rdesktop-1.8.0.org/configure.ac rdesktop-1.8.0/configure.ac
+--- rdesktop-1.8.0.org/configure.ac	2013-08-09 08:11:22.000000000 +0200
++++ rdesktop-1.8.0/configure.ac	2013-10-24 09:12:32.000000000 +0200
+@@ -126,7 +128,7 @@
+ 	      [static_gssglue=yes], [static_gssglue=no])
+ AS_IF([test "x$enable_credssp" != "xno"], [
+ 	  if test -n "$PKG_CONFIG"; then
+-	    PKG_CHECK_MODULES(GSSGLUE, libgssglue, [WITH_CREDSSP=1], [WITH_CREDSSP=0])
++	    PKG_CHECK_MODULES(GSSGLUE, heimdal-gssapi, [WITH_CREDSSP=1], [WITH_CREDSSP=0])
+ 	  fi
+ 
+ 	  if test x"$WITH_CREDSSP" = "x1"; then
+@@ -136,7 +138,7 @@
+ 	      AS_IF([test "x$static_gssglue" != "xno"], [
+ 	          LIBS="$LIBS -Wl,-Bstatic -lgssglue -Wl,-Bdynamic"
+ 	      ], [
+-	          LIBS="$LIBS -lgssglue"
++	          LIBS="$LIBS $GSSGLUE_LIBS"
+ 	      ])
+ 
+ 	      AC_DEFINE(WITH_CREDSSP)
