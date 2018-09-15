@@ -9,6 +9,7 @@ Source0:	http://downloads.sourceforge.net/rdesktop/%{name}-%{version}.tar.gz
 # Source0-md5:	86e8b368a7c715e74ded92e0d7912dc5
 Patch0:		%{name}-xinerama.patch
 Patch1:		%{name}-heimdal.patch
+Patch2:		openssl.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	alsa-lib-devel
 BuildRequires:	autoconf >= 2.50
@@ -39,6 +40,7 @@ wymagane żadne rozszerzenia po stronie serwera.
 %setup -q
 %patch0 -p1
 %patch1 -p1
+%patch2 -p1
 
 %build
 %{__aclocal}
