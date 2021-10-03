@@ -1,0 +1,10 @@
+--- rdesktop-1.8.4/Makefile.in~	2019-01-02 14:20:19.000000000 +0100
++++ rdesktop-1.8.4/Makefile.in	2021-10-03 23:20:43.079130278 +0200
+@@ -60,7 +60,6 @@
+ installbin: rdesktop
+ 	mkdir -p $(DESTDIR)$(bindir)
+ 	$(INSTALL) rdesktop $(DESTDIR)$(bindir)
+-	$(STRIP) $(DESTDIR)$(bindir)/rdesktop
+ 	chmod 755 $(DESTDIR)$(bindir)/rdesktop
+ 
+ .PHONY: installman
