@@ -1,25 +1,29 @@
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl.UTF-8):	Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
 Name:		rdesktop
-Version:	1.8.4
-Release:	2
+Version:	1.9.0
+Release:	1
 License:	GPL v3+
 Group:		X11/Applications/Networking
-Source0:	https://github.com/rdesktop/rdesktop/releases/download/v1.8.4/rdesktop-1.8.4.tar.gz
-# Source0-md5:	7273f9dad833f6899a3e5b39d7fdd6f2
+Source0:	https://github.com/rdesktop/rdesktop/releases/download/v%{version}/rdesktop-%{version}.tar.gz
+# Source0-md5:	c67767f5a329f902291a56d22ae4303a
 Patch0:		%{name}-xinerama.patch
-Patch1:		%{name}-heimdal.patch
-Patch2:		no-strip.patch
+Patch1:		no-strip.patch
+Patch2:		%{name}-ssl-exp-mod.patch
+Patch3:		%{name}-credssp-linux.patch
 URL:		http://www.rdesktop.org/
-BuildRequires:	alsa-lib-devel
 BuildRequires:	autoconf >= 2.50
 BuildRequires:	automake
+BuildRequires:	gnutls-devel
 BuildRequires:	heimdal-devel
 BuildRequires:	libsamplerate-devel
-BuildRequires:	openssl-devel >= 0.9.7d
+BuildRequires:	libtasn1-devel
+BuildRequires:	nettle-devel
 BuildRequires:	pcsc-lite-devel
 BuildRequires:	pkgconfig
+BuildRequires:	pulseaudio-devel
 BuildRequires:	xorg-lib-libX11-devel
+BuildRequires:	xorg-lib-libXcursor-devel
 BuildRequires:	xorg-lib-libXinerama-devel
 BuildRequires:	xorg-lib-libXrandr-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
@@ -41,6 +45,7 @@ wymagane żadne rozszerzenia po stronie serwera.
 %patch -P0 -p1
 %patch -P1 -p1
 %patch -P2 -p1
+%patch -P3 -p1
 
 %build
 %{__aclocal}
@@ -49,7 +54,7 @@ wymagane żadne rozszerzenia po stronie serwera.
 	--enable-credssp \
 	--enable-smartcard \
 	--with-ipv6 \
-	--with-sound=alsa
+	--with-sound=pulse
 # note: --with-libvncserver requires vnc/ code, which don't exist
 
 %{__make}
@@ -65,7 +70,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc README doc/
+%doc README.md doc/
 %attr(755,root,root) %{_bindir}/rdesktop
 %{_datadir}/rdesktop
 %{_mandir}/man1/rdesktop.1*

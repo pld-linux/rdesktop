@@ -1,6 +1,7 @@
---- rdesktop/configure.ac
-+++ rdesktop/configure.ac
-@@ -30,6 +30,8 @@
+# fullscreen and default size follow the Xinerama screen under the cursor
+--- a/configure.ac
++++ b/configure.ac
+@@ -35,6 +35,8 @@
  AC_SEARCH_LIBS(socket, socket)
  AC_SEARCH_LIBS(inet_aton, resolv)
  
@@ -9,9 +10,9 @@
  AC_CHECK_HEADER(sys/select.h, AC_DEFINE(HAVE_SYS_SELECT_H))
  AC_CHECK_HEADER(sys/modem.h, AC_DEFINE(HAVE_SYS_MODEM_H))
  AC_CHECK_HEADER(sys/filio.h, AC_DEFINE(HAVE_SYS_FILIO_H))
---- rdesktop/xwin.c
-+++ rdesktop/xwin.c
-@@ -31,6 +31,9 @@
+--- a/xwin.c
++++ b/xwin.c
+@@ -37,6 +37,9 @@
  #ifdef HAVE_XRANDR
  #include <X11/extensions/Xrandr.h>
  #endif
@@ -19,9 +20,9 @@
 +#include <X11/extensions/Xinerama.h>
 +#endif
  
- extern int g_sizeopt;
- extern int g_width;
-@@ -816,6 +819,66 @@
+ #ifdef __APPLE__
+ #include <sys/param.h>
+@@ -872,6 +875,67 @@
  #define LOUT24(o, x) { *(o++) = x; *(o++) = x >> 8; *(o++) = x >> 16; }
  #define LOUT32(o, x) { *(o++) = x; *(o++) = x >> 8; *(o++) = x >> 16; *(o++) = x >> 24; }
  
@@ -48,10 +49,11 @@
 +
 +		/* Search for the appropriate screen */
 +		i = 0;
-+		while (!  (screeninfo[i].x_org <= x
-+			&& screeninfo[i].y_org <= y
-+			&& screeninfo[i].x_org + screeninfo[i].width >= x
-+			&& screeninfo[i].y_org + screeninfo[i].height >= y ))
++		while (i < screens
++			&& !(screeninfo[i].x_org <= x
++				&& screeninfo[i].y_org <= y
++				&& screeninfo[i].x_org + screeninfo[i].width >= x
++				&& screeninfo[i].y_org + screeninfo[i].height >= y))
 +			i++;
 +		if (i >= screens)
 +			i = 0;
@@ -88,58 +90,84 @@
  static uint32
  translate_colour(uint32 colour)
  {
-@@ -1912,17 +1975,26 @@
- 	 */
+@@ -2046,8 +2110,11 @@
+ void
+ ui_get_screen_size(uint32 * width, uint32 * height)
+ {
+-	*width = WidthOfScreen(g_screen);
+-	*height = HeightOfScreen(g_screen);
++	XRectangle screen;
++
++	ScreenSize(&screen);
++	*width = screen.width;
++	*height = screen.height;
+ }
+ 
+ void
+@@ -2209,10 +2276,20 @@
+ 	logger(GUI, Debug, "ui_create_window() width = %d, height = %d", width, height);
+ 
+ 	/* Handle -x-y portion of geometry string */
+-	if (g_xpos < 0 || (g_xpos == 0 && (g_pos & 2)))
+-		g_xpos = WidthOfScreen(g_screen) + g_xpos - width;
+-	if (g_ypos < 0 || (g_ypos == 0 && (g_pos & 4)))
+-		g_ypos = HeightOfScreen(g_screen) + g_ypos - height;
++	{
++		XRectangle screen;
++
++		ScreenSize(&screen);
++		if (g_fullscreen)
++		{
++			g_xpos = screen.x;
++			g_ypos = screen.y;
++		}
++		if (g_xpos < 0 || (g_xpos == 0 && (g_pos & 2)))
++			g_xpos = screen.width + g_xpos - width;
++		if (g_ypos < 0 || (g_ypos == 0 && (g_pos & 4)))
++			g_ypos = screen.height + g_ypos - height;
++	}
+ 
+ 	value_mask = get_window_attribs(&attribs);
+ 
+@@ -2444,10 +2521,13 @@
  	if (g_fullscreen)
  	{
--		g_width = WidthOfScreen(g_screen);
--		g_height = HeightOfScreen(g_screen);
+ 		/* Since we need to create a fullscreen window we need to know screen size */
+-		x = 0;
+-		y = 0;
+-		width = WidthOfScreen(g_screen);
+-		height = HeightOfScreen(g_screen);
 +		XRectangle screen;
++
 +		ScreenSize(&screen);
-+
-+		g_width = screen.width;
-+		g_height = screen.height;
- 		g_using_full_workarea = True;
++		x = screen.x;
++		y = screen.y;
++		width = screen.width;
++		height = screen.height;
  	}
- 	else if (g_sizeopt < 0)
+ 	else
  	{
-+		XRectangle screen;
-+		ScreenSize(&screen);
-+
-+		g_width = screen.width;
-+		g_height = screen.height;
-+
- 		/* Percent of screen */
- 		if (-g_sizeopt >= 100)
- 			g_using_full_workarea = True;
--		g_height = HeightOfScreen(g_screen) * (-g_sizeopt) / 100;
--		g_width = WidthOfScreen(g_screen) * (-g_sizeopt) / 100;
-+               g_width = screen.width * (-g_width) / 100;
-+               g_height = screen.height * (-g_width) / 100;
- 	}
- 	else if (g_sizeopt == 1)
+@@ -3174,9 +3254,20 @@
+ 	/* Set up width and height for new session */
+ 	if (g_fullscreen || g_seamless_rdp)
  	{
-@@ -2005,14 +2077,19 @@
- 	long input_mask, ic_input_mask;
- 	XEvent xevent;
- 
--	wndwidth = g_fullscreen ? WidthOfScreen(g_screen) : g_width;
--	wndheight = g_fullscreen ? HeightOfScreen(g_screen) : g_height;
-+	XRectangle screen;
-+	ScreenSize(&screen);
- 
-+	wndwidth = g_fullscreen ? screen.width : g_width;
-+	wndheight = g_fullscreen ? screen.height : g_height;
-+	g_xpos = g_fullscreen ? screen.x : g_xpos;
-+	g_ypos = g_fullscreen ? screen.y : g_ypos;
+-		/* follow root window size */
+-		g_requested_session_width = WidthOfScreen(g_screen);
+-		g_requested_session_height = HeightOfScreen(g_screen);
++		if (g_seamless_rdp)
++		{
++			/* seamless windows span the whole root window */
++			g_requested_session_width = WidthOfScreen(g_screen);
++			g_requested_session_height = HeightOfScreen(g_screen);
++		}
++		else
++		{
++			XRectangle screen;
 +
- 	/* Handle -x-y portion of geometry string */
- 	if (g_xpos < 0 || (g_xpos == 0 && (g_pos & 2)))
--		g_xpos = WidthOfScreen(g_screen) + g_xpos - g_width;
-+		g_xpos = screen.width + g_xpos - g_width;
- 	if (g_ypos < 0 || (g_ypos == 0 && (g_pos & 4)))
--		g_ypos = HeightOfScreen(g_screen) + g_ypos - g_height;
-+		g_ypos = screen.height + g_ypos - g_height;
- 
- 	get_window_attribs(&attribs);
- 
++			ScreenSize(&screen);
++			g_requested_session_width = screen.width;
++			g_requested_session_height = screen.height;
++		}
+ 		if (g_window_size_type == PercentageOfScreen)
+ 		{
+ 			/* TODO: Implement percentage of screen */

@@ -1,0 +1,15 @@
+# CredSSP probing skipped Linux when OSTYPE is not exported by the build shell
+--- a/configure.ac
++++ b/configure.ac
+@@ -83,6 +83,11 @@
+ 					PKG_CHECK_MODULES(GSSAPI, gss, [WITH_CREDSSP=1], [WITH_CREDSSP=0])
+ 				fi
+ 				;;
++				*-*-linux*)
++				if test -n "$PKG_CONFIG"; then
++					PKG_CHECK_MODULES(GSSAPI, krb5-gssapi, [WITH_CREDSSP=1], [WITH_CREDSSP=0])
++				fi
++				;;
+ 			*)
+ 				;;
+ 			esac
