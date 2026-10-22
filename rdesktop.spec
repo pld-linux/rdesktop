@@ -11,6 +11,7 @@ Patch0:		%{name}-xinerama.patch
 Patch1:		no-strip.patch
 Patch2:		%{name}-ssl-exp-mod.patch
 Patch3:		%{name}-credssp-linux.patch
+Patch4:		%{name}-nettle4.patch
 URL:		http://www.rdesktop.org/
 BuildRequires:	autoconf >= 2.50
 BuildRequires:	automake
@@ -46,6 +47,7 @@ wymagane żadne rozszerzenia po stronie serwera.
 %patch -P1 -p1
 %patch -P2 -p1
 %patch -P3 -p1
+%patch -P4 -p1
 
 %build
 %{__aclocal}

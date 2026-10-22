@@ -1,0 +1,53 @@
+--- rdesktop-1.9.0/ssl.c.orig	2026-10-22 05:59:27.324585488 +0200
++++ rdesktop-1.9.0/ssl.c	2026-10-22 06:24:04.383250241 +0200
+@@ -25,6 +25,7 @@
+ #include "asn.h"
+ 
+ #include <gnutls/x509.h>
++#include <nettle/version.h>
+ 
+ void
+ rdssl_sha1_init(RDSSL_SHA1 * sha1)
+@@ -41,7 +42,11 @@ rdssl_sha1_update(RDSSL_SHA1 * sha1, uin
+ void
+ rdssl_sha1_final(RDSSL_SHA1 * sha1, uint8 * out_data)
+ {
++#if NETTLE_VERSION_MAJOR >= 4
++	sha1_digest(sha1, out_data);
++#else
+ 	sha1_digest(sha1, SHA1_DIGEST_SIZE, out_data);
++#endif
+ }
+ 
+ void
+@@ -59,7 +64,11 @@ rdssl_md5_update(RDSSL_MD5 * md5, uint8
+ void
+ rdssl_md5_final(RDSSL_MD5 * md5, uint8 * out_data)
+ {
++#if NETTLE_VERSION_MAJOR >= 4
++	md5_digest(md5, out_data);
++#else
+ 	md5_digest(md5, MD5_DIGEST_SIZE, out_data);
++#endif
+ }
+ 
+ void
+@@ -104,7 +113,7 @@ rdssl_rsa_encrypt(uint8 * out, uint8 * i
+ 	mpz_clear(exp);
+ 	mpz_clear(mod);
+ 
+-	if (outlen < (int) modulus_size)
++	if (outlen < (size_t) modulus_size)
+ 		memset(out + outlen, 0, modulus_size - outlen);
+ }
+ 
+@@ -360,5 +369,9 @@ rdssl_hmac_md5(const void *key, int key_
+ 
+ 	hmac_md5_set_key(&ctx, key_len, key);
+ 	hmac_md5_update(&ctx, msg_len, msg);
++#if NETTLE_VERSION_MAJOR >= 4
++	hmac_md5_digest(&ctx, md);
++#else
+ 	hmac_md5_digest(&ctx, MD5_DIGEST_SIZE, md);
++#endif
+ }
