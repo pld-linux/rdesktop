@@ -12,15 +12,16 @@ Patch1:		no-strip.patch
 Patch2:		%{name}-ssl-exp-mod.patch
 Patch3:		%{name}-credssp-linux.patch
 Patch4:		%{name}-nettle4.patch
-URL:		http://www.rdesktop.org/
+URL:		https://github.com/rdesktop/rdesktop
 BuildRequires:	autoconf >= 2.50
 BuildRequires:	automake
-BuildRequires:	gnutls-devel
+BuildRequires:	gmp-devel
+BuildRequires:	gnutls-devel >= 3.2.0
 BuildRequires:	heimdal-devel
 BuildRequires:	libsamplerate-devel
 BuildRequires:	libtasn1-devel
 BuildRequires:	nettle-devel
-BuildRequires:	pcsc-lite-devel
+BuildRequires:	pcsc-lite-devel >= 1.6.0
 BuildRequires:	pkgconfig
 BuildRequires:	pulseaudio-devel
 BuildRequires:	xorg-lib-libX11-devel
