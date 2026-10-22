@@ -1,3 +1,11 @@
+#
+# Conditional build:
+%bcond_with	alsa	# ALSA for sound (instead of pulseaudio)
+%bcond_with	libao	# libao for sound (instead of pulseaudio)
+
+%if %{without alsa} && %{without libao}
+%define	with_pulse	1
+%endif
 Summary:	RDP client for accessing Windows NT Terminal Server
 Summary(pl.UTF-8):	Klient RDP umożliwiający dostęp do Terminal Serwera WinNT
 Name:		rdesktop
@@ -13,21 +21,25 @@ Patch2:		%{name}-ssl-exp-mod.patch
 Patch3:		%{name}-credssp-linux.patch
 Patch4:		%{name}-nettle4.patch
 URL:		https://github.com/rdesktop/rdesktop
+%{?with_alsa:BuildRequires:	alsa-lib-devel}
 BuildRequires:	autoconf >= 2.50
 BuildRequires:	automake
 BuildRequires:	gmp-devel
 BuildRequires:	gnutls-devel >= 3.2.0
 BuildRequires:	heimdal-devel
+%{?with_libao:BuildRequires:	libao-devel}
 BuildRequires:	libsamplerate-devel
 BuildRequires:	libtasn1-devel
 BuildRequires:	nettle-devel
 BuildRequires:	pcsc-lite-devel >= 1.6.0
 BuildRequires:	pkgconfig
-BuildRequires:	pulseaudio-devel
+%{?with_pulse:BuildRequires:	pulseaudio-devel}
 BuildRequires:	xorg-lib-libX11-devel
 BuildRequires:	xorg-lib-libXcursor-devel
 BuildRequires:	xorg-lib-libXinerama-devel
 BuildRequires:	xorg-lib-libXrandr-devel
+Requires:	gnutls-libs%{?_isa} >= 3.2.0
+Requires:	pcsc-lite-libs%{?_isa} >= 1.6.0
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
@@ -57,8 +69,7 @@ wymagane żadne rozszerzenia po stronie serwera.
 	--enable-credssp \
 	--enable-smartcard \
 	--with-ipv6 \
-	--with-sound=pulse
-# note: --with-libvncserver requires vnc/ code, which don't exist
+	--with-sound=%{?with_alsa:alsa}%{?with_libao:libao}%{?with_pulse:pulse}
 
 %{__make}
 
@@ -73,7 +84,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc README.md doc/
+%doc README.md doc/{AUTHORS,ChangeLog,TODO,*.txt}
 %attr(755,root,root) %{_bindir}/rdesktop
 %{_datadir}/rdesktop
 %{_mandir}/man1/rdesktop.1*
